@@ -16,10 +16,12 @@
 #include <QQuickWindow>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QSysInfo>
 #include <QVersionNumber>
 #include <QVulkanInstance>
 
 #include <chrono>
+#include <exception>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -38,6 +40,38 @@
 #endif
 
 namespace {
+
+// ---------------------------------------------------------------- diagnostics
+// A GUI process has no console: every Qt message goes to a log file, and fatal
+// start-up errors are shown in a dialog (never a silent exit).
+QFile* g_log = nullptr;
+QStringList g_recent;  // last warnings, shown in the fatal dialog
+
+void log_handler(QtMsgType type, const QMessageLogContext&, const QString& msg) {
+    static const char* names[] = {"debug", "warning", "critical", "fatal", "info"};
+    QString line = QDateTime::currentDateTime().toString("HH:mm:ss.zzz") + " [" + names[int(type) % 5] + "] " + msg + "\n";
+    if (g_log) {
+        g_log->write(line.toUtf8());
+        g_log->flush();
+    }
+    if (type != QtDebugMsg && type != QtInfoMsg) {
+        g_recent << msg;
+        if (g_recent.size() > 12) g_recent.removeFirst();
+    }
+    std::fputs(line.toLocal8Bit().constData(), stderr);
+}
+
+int fatal(int code, const QString& what) {
+    QString text = what;
+    if (!g_recent.isEmpty()) text += "\n\nDetails:\n" + g_recent.join("\n");
+    if (g_log) text += "\n\nLog: " + g_log->fileName();
+    qCritical("%s", qPrintable(what));
+#ifdef _WIN32
+    MessageBoxW(nullptr, reinterpret_cast<const wchar_t*>(text.utf16()), L"ANVIL could not start", MB_OK | MB_ICONERROR);
+#endif
+    std::fprintf(stderr, "%s\n", text.toLocal8Bit().constData());
+    return code;
+}
 
 /// Milliseconds since the OS created this process (cold-start measurement, gate G3).
 double process_age_ms() {
@@ -74,6 +108,26 @@ int main(int argc, char** argv) {
     QGuiApplication::setApplicationName("ANVIL");
     QQuickStyle::setStyle("Basic");
 
+    {
+        const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        QDir().mkpath(dir);
+        g_log = new QFile(dir + "/anvil.log", &app);
+        if (g_log->open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) qInstallMessageHandler(log_handler);
+        else g_log = nullptr;
+        qInfo("ANVIL %s starting (Qt %s, %s)", ANVIL_APP_VERSION, qVersion(), qPrintable(QSysInfo::prettyProductName()));
+    }
+    std::set_terminate([] {
+        QString what = "unknown error";
+        try {
+            if (auto e = std::current_exception()) std::rethrow_exception(e);
+        } catch (const std::exception& e) {
+            what = e.what();
+        } catch (...) {
+        }
+        fatal(6, "ANVIL stopped because of an unexpected error: " + what +
+                     "\n\nYour work is in the journal and will be offered for recovery at the next start.");
+        std::abort();
+    });
     QStringList args = app.arguments();
     auto arg = [&](const QString& name) -> QString {
         int i = args.indexOf(name);
@@ -87,11 +141,11 @@ int main(int argc, char** argv) {
     {
         QVulkanInstance probe;
         probe.setApiVersion(QVersionNumber(1, 1));
-        if (!probe.create()) {
-            std::fprintf(stderr, "ANVIL needs Vulkan 1.1+ (driver missing or GPU unsupported): error %d\n",
-                         int(probe.errorCode()));
-            return 2;
-        }
+        if (!probe.create())
+            return fatal(2, QString("ANVIL needs a Vulkan 1.1+ driver, but no Vulkan instance could be created "
+                                    "(VkResult %1). Install or update the GPU driver (NVIDIA: GeForce driver).")
+                                .arg(int(probe.errorCode())));
+        qInfo("Vulkan instance OK (API %s)", qPrintable(probe.apiVersion().toString()));
     }
 
     const QString sessions = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/sessions";
@@ -105,8 +159,8 @@ int main(int argc, char** argv) {
     try {
         ctrl = std::make_unique<anvil::AppController>(opt, session_dir.toStdString());
     } catch (const std::exception& e) {
-        std::fprintf(stderr, "ANVIL failed to start: %s\n", e.what());
-        return 3;
+        return fatal(3, QString("The geometry/Python session failed to start:\n") + e.what() +
+                            "\n\nPython directory: " + QString::fromStdString(opt.python_dir.string()));
     }
 
     qmlRegisterType<anvil::ViewportItem>("Anvil.Native", 1, 0, "Viewport");
@@ -115,12 +169,16 @@ int main(int argc, char** argv) {
     QQmlApplicationEngine engine;
     engine.addImportPath("qrc:/qt/qml");
     engine.load(QUrl("qrc:/qt/qml/Anvil/Main.qml"));
-    if (engine.rootObjects().isEmpty()) return 4;
+    if (engine.rootObjects().isEmpty()) return fatal(4, "The user interface (QML) failed to load.");
     auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().front());
+    QObject::connect(window, &QQuickWindow::sceneGraphError, &app, [&](QQuickWindow::SceneGraphError, const QString& msg) {
+        fatal(7, "The Vulkan renderer could not be initialized:\n" + msg +
+                     "\n\nUpdate the GPU driver; ANVIL needs Vulkan 1.1 or newer.");
+        QCoreApplication::exit(7);
+    });
     auto* viewport = window->findChild<anvil::ViewportItem*>("viewport");
     if (!viewport) {
-        std::fprintf(stderr, "internal error: viewport item not found\n");
-        return 5;
+        return fatal(5, "Internal error: viewport item not found.");
     }
     ctrl->attachViewport(viewport);
 

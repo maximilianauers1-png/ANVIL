@@ -71,9 +71,21 @@ void ViewportItem::sync() {
     if (!renderer_) {
         renderer_ = new ViewportRenderer(window(), stats_);
         auto* r = renderer_;
-        connect(window(), &QQuickWindow::beforeRendering, window(), [r] { r->before_rendering(); }, Qt::DirectConnection);
-        connect(window(), &QQuickWindow::beforeRenderPassRecording, window(), [r] { r->before_render_pass(); },
-                Qt::DirectConnection);
+        // A renderer error must never terminate the process silently: log it and stop drawing.
+        connect(window(), &QQuickWindow::beforeRendering, window(), [r] {
+            try {
+                r->before_rendering();
+            } catch (const std::exception& e) {
+                qCritical("viewport renderer: %s", e.what());
+            }
+        }, Qt::DirectConnection);
+        connect(window(), &QQuickWindow::beforeRenderPassRecording, window(), [r] {
+            try {
+                r->before_render_pass();
+            } catch (const std::exception& e) {
+                qCritical("viewport renderer: %s", e.what());
+            }
+        }, Qt::DirectConnection);
     }
     FrameInput in;
     in.cam = cam_;

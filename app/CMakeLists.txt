@@ -38,6 +38,7 @@ qt_add_qml_module(anvil
   QML_FILES ${ANVIL_QML_FILES})
 
 target_include_directories(anvil PRIVATE src)
+target_compile_definitions(anvil PRIVATE ANVIL_APP_VERSION="${PROJECT_VERSION}")
 target_link_libraries(anvil PRIVATE anvil_session anvil_vulkan_headers
   Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2)
 anvil_warnings(anvil)
