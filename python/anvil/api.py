@@ -28,7 +28,8 @@ __all__ = [
     "pattern_linear", "pattern_circular", "loft", "sweep", "ref", "import_step", "import_step_solid",
     "export_step", "solidify", "deform", "sketch_polyline", "sketch_rect", "sketch_circle", "extrude_sketch",
     "cut_sketch", "solidify_sketch", "revolve_sketch", "sketch_move", "sketch_dim", "sketch_constrain",
-    "sketch_set", "sketch_delete", "deform_object", "cut_with", "view", "theme", "display", "select", "set_unit", "GeometryError",
+    "sketch_set", "sketch_delete", "deform_object", "cut_with", "fillet_object", "chamfer_object",
+    "shell_object", "edit_preview", "view", "theme", "display", "select", "set_unit", "GeometryError",
 ]
 
 GeometryError = _a.GeometryError
@@ -354,7 +355,15 @@ def import_step(path: str, name: str = None) -> Obj:
 def export_step(s, path: str):
     """Exports exact geometry as STEP AP214 (unit mm)."""
     path = _os.path.abspath(_os.fspath(path))
-    _a.export_step(_node(s), path)
+    if isinstance(s, (list, tuple)):  # several objects: one combined solid
+        if not s:
+            raise ValueError("export_step(): nothing to export")
+        node = _node(s[0])
+        for o in s[1:]:
+            node = _a.make_boolean("union", node, _node(o))
+    else:
+        node = _node(s)
+    _a.export_step(node, path)
     print(f"exported {path} (STEP, mm)")
 
 
@@ -422,10 +431,18 @@ def edit(obj, path: str = "", **params):
     edit("Base", "a", h=4*mm) for the first operand of a boolean."""
     name = _name(obj)
     node = _a.get(name).child(path) if path else _a.get(name)
-    kind = node.kind.lower()
-    if kind not in _PARAM_DIMS:
-        raise TypeError(f"{node.kind} has no editable parameters")
-    _a.edit(name, path, _params(kind, params))
+    kind = {"linearpattern": "linear_pattern", "circularpattern": "circular_pattern"}.get(node.kind.lower(), node.kind.lower())
+    p = {}
+    for k, v in params.items():  # dimensionless parameters (counts, factors) take plain numbers
+        if kind in _PARAM_DIMS and k in _PARAM_DIMS[kind]:
+            p[k] = _param(k, v, _PARAM_DIMS[kind][k])
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            p[k] = (float(v), "")
+        elif isinstance(v, str):
+            p[k] = (0.0, v)
+        else:
+            raise TypeError(f"{node.kind}.{k}: unsupported value {v!r}")
+    _a.edit(name, path, p)
 
 
 def move(obj, x=0 * mm, y=0 * mm, z=0 * mm):
@@ -755,3 +772,34 @@ def deform_object(name: str, **params) -> Obj:
     else:
         _a.set_root(name, deform(Solid(node), **params)._node)
     return Obj(name)
+
+
+def fillet_object(name: str, r=1 * mm, edges: str = "all") -> Obj:
+    """Rounds edges of an object in place (one undo step)."""
+    _a.set_root(name, fillet(Solid(_a.get(name)), r, edges)._node)
+    return Obj(name)
+
+
+def chamfer_object(name: str, d=0.5 * mm, edges: str = "all") -> Obj:
+    _a.set_root(name, chamfer_edges(Solid(_a.get(name)), d, edges)._node)
+    return Obj(name)
+
+
+def shell_object(name: str, t=1 * mm, faces: str = "top") -> Obj:
+    _a.set_root(name, shell(Solid(_a.get(name)), t, faces)._node)
+    return Obj(name)
+
+
+def edit_preview(name: str, path: str = "", **params) -> Solid:
+    """The object with changed parameters, without changing the document
+    (used for live previews while a value is being dragged)."""
+    node = _a.get(name).child(path) if path else _a.get(name)
+    kind = {"linearpattern": "linear_pattern", "circularpattern": "circular_pattern"}.get(node.kind.lower(), node.kind.lower())
+    p = {}
+    for k, v in params.items():
+        if kind in _PARAM_DIMS and k in _PARAM_DIMS[kind]:
+            p[k] = _param(k, v, _PARAM_DIMS[kind][k])
+        else:
+            p[k] = (float(v), "") if not isinstance(v, str) else (0.0, v)
+    root = _a.get(name)
+    return Solid(_a.with_params(root, path, p))

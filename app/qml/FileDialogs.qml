@@ -6,6 +6,23 @@ Item {
     function importStl() { importDlg.open() }
     function save() { saveDlg.open() }
     function open() { openDlg.open() }
+    function importStep() { stepInDlg.open() }
+    function exportStep() { stepOutDlg.open() }
+    function py(s) { return JSON.stringify(s) }  // JSON string literal == Python string literal for paths
+    FileDialog {
+        id: stepInDlg
+        title: "Import STEP"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["STEP files (*.step *.stp)"]
+        onAccepted: App.execute("import_step(" + py(App.urlToPath(selectedFile)) + ")", "ui")
+    }
+    FileDialog {
+        id: stepOutDlg
+        title: "Export STEP"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["STEP files (*.step)"]
+        onAccepted: App.execute("export_step([" + App.selection.map(py).join(", ") + "], " + py(App.urlToPath(selectedFile)) + ")", "ui")
+    }
     FileDialog {
         id: importDlg
         title: "Import STL"

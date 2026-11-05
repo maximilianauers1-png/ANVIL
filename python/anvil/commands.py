@@ -208,16 +208,109 @@ for _mode, _label in (("shaded", "Shaded view"), ("mesh", "Mesh view")):
                          help=f"Viewport: {_label.lower()}", keywords="wireframe triangles display",
                          build=(lambda m: (lambda ctx: f"display({m!r})"))(_mode)))
 
+# --- drawing (the viewport collects points, then generates sketch_* commands) ---
+for _id, _label, _help in (("draw.polyline", "Polyline", "Click points; click the first point to close, double-click or Enter to finish"),
+                           ("draw.rect", "Rectangle", "Two corners"),
+                           ("draw.circle", "Circle", "Center, then a point on the circle")):
+    registry.add(Command(id=_id, label=_label, category="Draw", help=_help, build=lambda ctx: None,
+                         ui=_id.replace("draw.", "draw_"), keywords="sketch line polygon trace mask"))
+
+
+def _single(ctx):
+    return repr(ctx.selection[0])
+
+
+@command("sketch.extrude", "Extrude", "Sketch", "Turn the sketch into a solid (5 mm, adjustable)", min_selection=1,
+         max_selection=1, keywords="pad extrusion")
+def _(ctx):
+    return f"extrude_sketch({_single(ctx)}, 5*mm)"
+
+
+@command("sketch.solidify", "Solidify", "Sketch", "Thicken the curves into walls/traces (1 mm wide, 1 mm high)",
+         min_selection=1, max_selection=1, keywords="thicken trace wall rib")
+def _(ctx):
+    return f"solidify_sketch({_single(ctx)}, 1*mm, 1*mm)"
+
+
+@command("sketch.cut", "Cut through", "Sketch", "Cut the profiles through the part the sketch was drawn on",
+         min_selection=1, max_selection=1, ui="sketch_cut", keywords="hole pocket mask subtract")
+def _(ctx):
+    return None
+
+
+@command("sketch.revolve", "Revolve", "Sketch", "Revolve about the sketch's vertical axis", min_selection=1,
+         max_selection=1, keywords="lathe turn")
+def _(ctx):
+    return f"revolve_sketch({_single(ctx)})"
+
+
+@command("sketch.edit", "Edit sketch", "Sketch", "Drag points, add dimensions and constraints", min_selection=1,
+         max_selection=1, ui="sketch_edit", keywords="modify constraints dimensions")
+def _(ctx):
+    return None
+
+
+@command("edit.cut_with", "Cut with…", "Boolean", "Subtract objects from the selected one: click them, then Enter",
+         min_selection=1, ui="pick_tools", keywords="subtract difference minus hole mask")
+def _(ctx):
+    if len(ctx.selection) >= 2:
+        return f"subtract({_names(ctx)})"
+    return None
+
+
+@command("edit.deform", "Deform", "Edit", "Stretch, taper, twist or bend (drag the values in the panel)",
+         min_selection=1, max_selection=1, keywords="stretch taper twist bend scale warp")
+def _(ctx):
+    return f"deform_object({_single(ctx)})"
+
+
+@command("edit.fillet", "Round edges", "Edit", "Fillet all edges (1 mm; edit radius and edge choice in the panel)",
+         min_selection=1, max_selection=1, keywords="fillet round radius")
+def _(ctx):
+    return f"fillet_object({_single(ctx)}, 1*mm)"
+
+
+@command("edit.chamfer", "Chamfer edges", "Edit", "Chamfer all edges (0.5 mm)", min_selection=1, max_selection=1,
+         keywords="bevel")
+def _(ctx):
+    return f"chamfer_object({_single(ctx)}, 0.5*mm)"
+
+
+@command("edit.shell", "Shell", "Edit", "Hollow out, open at the top (1 mm walls)", min_selection=1, max_selection=1,
+         keywords="hollow wall thickness")
+def _(ctx):
+    return f"shell_object({_single(ctx)}, 1*mm)"
+
+
+@command("file.import_step", "Import STEP…", "File", "Import exact CAD geometry", ui="import_step_dialog",
+         keywords="open load cad")
+def _(ctx):
+    return None
+
+
+@command("file.export_step", "Export STEP…", "File", "Export exact geometry (mm)", min_selection=1,
+         ui="export_step_dialog", keywords="cad save")
+def _(ctx):
+    return None
+
+
 # Radial layout: slot index = sector (0 = east, counter-clockwise in 45 degree steps).
 # Positions are stable across contexts: inapplicable commands are greyed out,
 # never removed or reordered (muscle memory).
 _VIEW = {"submenu": "View", "items": ["view.right", "view.iso", "view.top", "view.bottom", "view.left",
                                       "view.ortho", "view.front", "view.frame"]}
+_MORE = {"submenu": "More", "items": ["create.sphere", "create.torus", "create.cone", "file.import_stl",
+                                      "file.import_step", "", "", ""]}
+_EDIT = {"submenu": "Edit", "items": ["edit.fillet", "edit.shell", "edit.chamfer", "edit.duplicate", "edit.hide",
+                                      "boolean.union", "boolean.intersect", ""]}
 registry.radial = {
     "Design": {
-        "empty": ["create.cylinder", "create.sphere", "create.box", "create.torus", "file.import_stl",
-                  "create.cone", "file.export_stl", _VIEW],
-        "selection": ["edit.move", "boolean.union", "boolean.subtract", "boolean.intersect", "edit.delete",
-                      "edit.hide", "file.export_stl", _VIEW],
+        # most used first and stable: drawing tools sit on the top half
+        "empty": ["create.cylinder", "create.box", "draw.polyline", "draw.rect", "draw.circle", _MORE,
+                  "file.export_stl", _VIEW],
+        "selection": ["edit.move", _EDIT, "edit.cut_with", "edit.deform", "edit.delete", "boolean.union",
+                      "file.export_stl", _VIEW],
+        "sketch": ["sketch.extrude", "sketch.solidify", "sketch.cut", "sketch.revolve", "edit.delete",
+                   "sketch.edit", "draw.polyline", _VIEW],
     },
 }

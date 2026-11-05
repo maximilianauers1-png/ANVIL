@@ -2,6 +2,7 @@
 // as Python source submitted here (requirement 2.5).
 #pragma once
 #include <QDir>
+#include <QHash>
 #include <QElapsedTimer>
 #include <QObject>
 #include <QStringList>
@@ -143,6 +144,17 @@ class AppController : public QObject {
     Q_INVOKABLE void resetRadialLayout();
     Q_INVOKABLE QString commandLabel(const QString& id) const;
     Q_INVOKABLE void appendConsole(const QString& text);
+    // sketches
+    /// "12.5" (display unit) or "3 cm" -> mm; NaN when the text is not a plain length.
+    Q_INVOKABLE double parseLength(const QString& text) const;
+    Q_INVOKABLE QString objectKind(const QString& name) const;
+    Q_INVOKABLE QVariantMap sketchInfo(const QString& name) const;  // points/curves/dims in world space + solver state
+    Q_INVOKABLE void sketchDrag(const QString& sketch, const QString& point, double x, double y);
+    Q_INVOKABLE void sketchSetDim(const QString& sketch, const QString& constraint, const QString& text);
+    Q_INVOKABLE void sketchConstrain(const QString& sketch, const QString& kind, const QStringList& refs);
+    Q_INVOKABLE void sketchDimension(const QString& sketch, const QString& kind, const QStringList& refs, const QString& text);
+    Q_INVOKABLE void sketchDelete(const QString& sketch, const QStringList& ids);
+    Q_INVOKABLE QString sketchTarget(const QString& sketch) const;  // part the sketch was drawn on ("" = unknown)
 
   signals:
     void documentChanged();
@@ -166,6 +178,12 @@ class AppController : public QObject {
     void previewError(const QString& error);
 
   private:
+    QString uniqueName(const QString& base) const;
+    void onSketchDrawn(const QString& kind, const QString& plane, double offset, const QVariantList& pts, bool closed,
+                       const QString& on);
+    void onToolsPicked(const QString& target, const QStringList& tools);
+    QHash<QString, QString> sketch_on_;  // sketch -> part it was drawn on (cut target)
+    QString select_after_;               // select this object once it exists
     void onDocumentChanged();
     void refreshModels();
     void handleUiRequest(const QString& json);

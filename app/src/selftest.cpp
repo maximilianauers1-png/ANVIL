@@ -135,6 +135,71 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     }, [this] { return idle() && app_->theme() == "studio" && app_->unit() == "mm" && app_->display() == "mesh"; });
     add("screenshot studio mesh", [this] { screenshot("07_studio_mesh"); });
 
+    // 11) draw a rectangle on the top face (radial NW = Rectangle), edit it, cut it through
+    add("shaded, top view, deselect", [this] {
+        clickItem("btnMesh");
+        app_->setSelection({});
+        app_->requestView("top");
+    }, [this] { return idle() && app_->display() == "shaded" && view_->camForward().z() < -0.999f; }, 10000);
+    add("radial flick NW starts Rectangle", [this] { flick(view_->mapToScene(QPointF(140, 180)), 135, 70); },
+        [this] { return view_->tool() == "draw" && view_->drawKind() == "rect"; });
+    add("rectangle: two corners on the top face", [this] {
+        click(project(-4.3, -1.7, 3));
+        click(project(4.3, 1.7, 3));
+    }, [this] { return idle() && hasObject("Sketch1") && app_->selection() == QStringList{"Sketch1"}; });
+    add("sketch lies on the top face (z = 3 mm)", [this] {
+        QVariantMap info = app_->sketchInfo("Sketch1");
+        check(info["plane"].toString() == "XY" && std::abs(info["offset"].toDouble() - 3.0) < 1e-9,
+              "sketch plane XY at offset " + info["offset"].toString());
+        check(app_->sketchTarget("Sketch1") == "Cylinder1", "sketch remembers its part: " + app_->sketchTarget("Sketch1"));
+    });
+    add("zoom to the part", [this] { app_->requestView("frame"); }, [this] { return idle(); });
+    add("open sketch editor", [this] { clickItem("sketchEdit"); }, [this] { return item("sketchDone") != nullptr; });
+    add("click the measured length of L1", [this] { clickItem("measLabel_L1"); },
+        [this] { return item("measure_L1") != nullptr; });
+    add("type 12 -> length dimension", [this] { typeInto("measure_L1", "12"); }, [this] {
+        if (!idle()) return false;
+        for (const auto& c : app_->sketchInfo("Sketch1")["curves"].toList())
+            if (c.toMap()["id"] == "L1") return std::abs(c.toMap()["length"].toDouble() - 12.0) < 1e-6;
+        return false;
+    });
+    add("screenshot sketch edit", [this] { screenshot("08_sketch_edit"); });
+    add("close sketch editor", [this] { clickItem("sketchDone"); }, [this] { return item("sketchCut") != nullptr; });
+    add("cut through the part (one click)", [this] {
+        vol_before_ = objectValue("Cylinder1", "volume");
+        clickItem("sketchCut");
+    }, [this] {
+        return idle() && objectValue("Cylinder1", "volume") > 0 &&
+               objectValue("Cylinder1", "volume") < vol_before_ - 1.0;
+    }, 15000);
+
+    // 12) polyline on the ground, solidify it into a trace, 'Cut with...' by picking
+    add("radial flick N starts Polyline", [this] {
+        app_->setSelection({});
+        flick(view_->mapToScene(QPointF(140, 180)), 90, 70);
+    }, [this] { return view_->tool() == "draw" && view_->drawKind() == "polyline"; });
+    add("polyline: three points, Enter", [this] {
+        click(project(-14, -3, 0));
+        click(project(0, -3, 0));
+        click(project(0, 6, 0));
+        key(Qt::Key_Return);
+    }, [this] { return idle() && hasObject("Sketch2") && app_->selection() == QStringList{"Sketch2"}; });
+    add("solidify (quick bar)", [this] { clickItem("sketchSolidify"); },
+        [this] { return idle() && hasObject("Solid1") && objectValue("Solid1", "volume") > 0; }, 15000);
+    add("select part, radial N = Cut with...", [this] {
+        app_->setSelection({"Cylinder1"});
+        vol_before_ = objectValue("Cylinder1", "volume");
+        flick(view_->mapToScene(QPointF(140, 180)), 90, 70);
+    }, [this] { return view_->tool() == "pick"; });
+    add("pick the trace, Enter cuts", [this] {
+        click(project(-13.3, -3, 1));
+        key(Qt::Key_Return);
+    }, [this] {
+        return idle() && !hasObject("Solid1") && objectValue("Cylinder1", "volume") < vol_before_ - 0.1;
+    }, 15000);
+    add("iso view for the result", [this] { app_->requestView("iso"); }, [this] { return idle(); });
+    add("screenshot mask cut", [this] { screenshot("09_mask_cut"); });
+
     connect(&timer_, &QTimer::timeout, this, &SelfTest::tick);
     timer_.start(50);
     step_clock_.start();
@@ -268,6 +333,11 @@ void SelfTest::flick(QPointF from, double angle_deg, double dist, Qt::MouseButto
 }
 void SelfTest::screenshot(const QString& name) { win_->grabWindow().save(QDir(out_).filePath(name + ".png")); }
 bool SelfTest::idle() const { return !app_->busy(); }
+double SelfTest::objectValue(const QString& name, const QString& key) const {
+    for (const auto& o : app_->objects())
+        if (o.toMap()["name"].toString() == name) return o.toMap()[key].toDouble();
+    return -1;
+}
 bool SelfTest::hasObject(const QString& name) const {
     for (const auto& o : app_->objects())
         if (o.toMap()["name"].toString() == name) return true;

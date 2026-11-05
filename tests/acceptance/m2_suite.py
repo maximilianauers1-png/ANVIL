@@ -149,4 +149,17 @@ extrude_sketch("R", 3 * mm, name="Dragged")
 close(info("Dragged")["volume"], 25 * 12 * 3, 1e-9, "dragged corner keeps the rectangle")
 k = sketch_dim("R", "length", "L1", "30 mm")
 close(info("Dragged")["volume"], 30 * 12 * 3, 1e-9, "dimension edits propagate to the extrusion")
+# exact part (fillet -> B-Rep) minus a mesh-only feature (solidify): mixed evaluation
+show(fillet(box(x=30 * mm, y=30 * mm, z=4 * mm), 1 * mm, edges="vertical"), name="Plate")
+sketch_polyline([(-20, 0), (20, 0)], plane="XY", name="Groove")
+solidify_sketch("Groove", width=2 * mm, height=1 * mm, ends="flat", name="GrooveSolid")
+v_plate = info("Plate")["volume"]
+cut_with("Plate", "GrooveSolid")
+close(v_plate - info("Plate")["volume"], 30 * 2 * 1, 1e-6, "B-Rep part minus solidified trace")
+assert check("Plate")["ok"], check("Plate")["summary"]
+try:
+    fillet_object("Plate", 0.2 * mm)
+    raise AssertionError("fillet on mesh geometry must be refused")
+except Exception as e:
+    assert "mesh geometry" in str(e), e
 print("M2 SUITE OK")

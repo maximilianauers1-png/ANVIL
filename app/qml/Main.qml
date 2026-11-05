@@ -56,10 +56,16 @@ ApplicationWindow {
 
                     // Radial menu key (default Space): hold, flick, release.
                     Keys.onPressed: (e) => {
-                        if (e.key === Qt.Key_Space && !e.isAutoRepeat) {
+                        if (drawOverlay.handleKey(e)) {
+                            e.accepted = true
+                        } else if (viewport.tool === "pick" && (e.key === Qt.Key_Return || e.key === Qt.Key_Enter)) {
+                            viewport.finishPick()
+                            e.accepted = true
+                        } else if (e.key === Qt.Key_Space && !e.isAutoRepeat) {
                             viewport.radialBegin(App.selection.length > 0 ? "selection" : "empty")
                             e.accepted = true
                         } else if (e.key === Qt.Key_Escape) {
+                            if (sketchEditor.active && viewport.tool === "select") sketchEditor.close()
                             viewport.radialCancel()
                             viewport.cancelTool()
                             App.clearPreview()
@@ -77,6 +83,16 @@ ApplicationWindow {
                     }
                 }
                 SnapOverlay { anchors.fill: parent; view: viewport }
+                DrawOverlay { id: drawOverlay; anchors.fill: parent; view: viewport }
+                SketchEditor { id: sketchEditor; anchors.fill: parent; view: viewport }
+                SketchBar {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: Theme.unit * 2
+                    view: viewport
+                    visible: sketch !== "" && viewport.tool === "select" && !sketchEditor.active
+                    onEditRequested: (name) => sketchEditor.open(name)
+                }
                 RadialMenu { anchors.fill: parent; view: viewport }
                 ViewCube {
                     anchors.top: parent.top
@@ -106,6 +122,12 @@ ApplicationWindow {
                         anchors.centerIn: parent
                         spacing: 12
                         ALabel { text: viewport.toolHint; anchors.verticalCenter: parent.verticalCenter }
+                        AButton {
+                            visible: viewport.tool === "pick" || (viewport.tool === "draw" && viewport.drawKind === "polyline")
+                            enabled: viewport.tool === "pick" ? viewport.pickedTools.length > 0 : viewport.drawPoints.length >= 2
+                            text: viewport.tool === "pick" ? "Cut (" + viewport.pickedTools.length + ")" : "Finish"
+                            onClicked: viewport.tool === "pick" ? viewport.finishPick() : viewport.finishDraw()
+                        }
                         AButton { text: "Cancel"; onClicked: viewport.cancelTool() }
                     }
                 }
@@ -146,6 +168,9 @@ ApplicationWindow {
             else if (tool === "import_dialog") fileDialogs.importStl()
             else if (tool === "save_dialog") fileDialogs.save()
             else if (tool === "open_dialog") fileDialogs.open()
+            else if (tool === "import_step_dialog") fileDialogs.importStep()
+            else if (tool === "export_step_dialog") fileDialogs.exportStep()
+            else if (tool === "sketch_edit" && App.selection.length === 1) sketchEditor.open(App.selection[0])
         }
     }
     FileDialogs { id: fileDialogs }

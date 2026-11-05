@@ -116,7 +116,8 @@ void ViewportItem::sync() {
                                                 : object_colors_[(idx - 1) % object_colors_.size()].value<QColor>();
             if (!o.manifold) c = QColor(200, 90, 80);  // non-manifold imports stand out
             item.color[0] = float(c.redF()), item.color[1] = float(c.greenF()), item.color[2] = float(c.blueF()), item.color[3] = 1;
-            bool sel = selection_.contains(QString::fromStdString(o.name));
+            QString qn = QString::fromStdString(o.name);
+            bool sel = selection_.contains(qn) || (tool_ == "pick" && picked_tools_.contains(qn));
             item.highlight = sel ? 1.f : 0.f;
             if (sel && tool_ == "move" && base_) item.extra_offset = snap_.point - *base_;
             in.items.push_back(item);
@@ -226,6 +227,14 @@ QString ViewportItem::snapKind() const {
 QString ViewportItem::toolHint() const {
     if (tool_ == "move")
         return base_ ? "Move: click the destination point (Esc cancels)" : "Move: click the base point (Esc cancels)";
+    if (tool_ == "draw") {
+        if (!draw_.have_plane) return "Click to start (on a face or the ground)  ·  Alt: no snapping  ·  Esc cancels";
+        if (draw_.kind == "rect") return "Click the opposite corner (or type a length)";
+        if (draw_.kind == "circle") return "Click a point on the circle (or type the radius)";
+        return "Click the next point, the first point to close  ·  Enter/double-click finishes  ·  Backspace undoes  ·  type a length";
+    }
+    if (tool_ == "pick")
+        return "Cut with: click the objects to subtract, then Enter or double-click (Esc cancels)";
     return {};
 }
 
@@ -336,9 +345,26 @@ void ViewportItem::mouseReleaseEvent(QMouseEvent* e) {
                 emit moveRequested(selection_.front(), delta.x, delta.y, delta.z);
                 cancelTool();
             }
+        } else if (tool_ == "draw") {
+            hover_pos_ = e->position();
+            drawMove(hover_pos_);
+            drawClick(false);
+        } else if (tool_ == "pick") {
+            QString o = QString::fromStdString(snap_.object);
+            if (o.isEmpty()) o = pickSketchAt(e->position().x(), e->position().y());
+            if (!o.isEmpty() && o != pick_target_) {
+                if (picked_tools_.contains(o)) picked_tools_.removeAll(o);
+                else picked_tools_ << o;
+                emit toolChanged();
+                requestFrame();
+                if (pick_single_) finishPick();
+            }
         } else {
             bool add = e->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier);
-            emit picked(QString::fromStdString(snap_.object), add);
+            QString o = QString::fromStdString(snap_.object);
+            // sketches have no faces: fall back to their lines in screen space
+            if (o.isEmpty()) o = pickSketchAt(e->position().x(), e->position().y());
+            emit picked(o, add);
         }
     }
     dragging_ = false;
@@ -346,7 +372,19 @@ void ViewportItem::mouseReleaseEvent(QMouseEvent* e) {
 }
 
 void ViewportItem::mouseDoubleClickEvent(QMouseEvent* e) {
-    if (e->button() == Qt::LeftButton && snap_.object.empty()) frameAll();
+    if (e->button() != Qt::LeftButton) return;
+    if (tool_ == "draw") {
+        drawClick(true);
+        return;
+    }
+    if (tool_ == "pick") {
+        finishPick();
+        return;
+    }
+    QString o = QString::fromStdString(snap_.object);
+    if (o.isEmpty()) o = pickSketchAt(e->position().x(), e->position().y());
+    if (o.isEmpty()) frameAll();
+    else emit objectDoubleClicked(o);
 }
 
 void ViewportItem::hoverMoveEvent(QHoverEvent* e) {
@@ -355,7 +393,8 @@ void ViewportItem::hoverMoveEvent(QHoverEvent* e) {
         if (radial_.move(hover_pos_.x(), hover_pos_.y())) emit radialChanged();
         return;
     }
-    updateSnap(hover_pos_);
+    if (tool_ == "draw") drawMove(hover_pos_);
+    else updateSnap(hover_pos_);
 }
 
 void ViewportItem::wheelEvent(QWheelEvent* e) {
@@ -367,12 +406,14 @@ void ViewportItem::wheelEvent(QWheelEvent* e) {
     cam_.zoom_at(std::pow(kWheelStep, notches), p.x() * dpr(), p.y() * dpr());
     emit cameraChanged();
     requestFrame();
-    updateSnap(p);
+    if (tool_ == "draw") drawMove(p);
+    else updateSnap(p);
 }
 
 // ------------------------------------------------------------------ radial
 void ViewportItem::radialBegin(QString context) {
     if (!radial_rings_) return;
+    if (context_resolver_) context = context_resolver_(context);
     radial_context_ = context;
     radial_point_ = snapPoint();
     radial_point_exact_ = snap_visible_ ? snap_.point : Vec3{};
@@ -405,8 +446,15 @@ void ViewportItem::startMoveTool() {
 }
 
 void ViewportItem::cancelTool() {
+    bool was_draw = tool_ == "draw";
     tool_ = "select";
     base_.reset();
+    picked_tools_.clear();
+    pick_target_.clear();
+    if (was_draw) {
+        draw_ = Draw{};
+        emit drawChanged();
+    }
     emit toolChanged();
     requestFrame();
 }

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "anvil/radial.hpp"
+#include "anvil/sketch.hpp"
 #include "anvil/snap.hpp"
 #include "scene_builder.hpp"
 
@@ -40,6 +41,18 @@ class ViewportItem : public QQuickItem {
     Q_PROPERTY(QString toolHint READ toolHint NOTIFY toolChanged)
     Q_PROPERTY(bool hasBasePoint READ hasBasePoint NOTIFY toolChanged)
     Q_PROPERTY(QPointF basePos READ basePos NOTIFY snapChanged)
+    // drawing tool (polyline / rectangle / circle on a plane)
+    Q_PROPERTY(QVariantList drawPoints READ drawPoints NOTIFY drawChanged)
+    Q_PROPERTY(QPointF drawCursor READ drawCursor NOTIFY drawChanged)
+    Q_PROPERTY(QString drawKind READ drawKind NOTIFY drawChanged)
+    Q_PROPERTY(QString drawGuide READ drawGuide NOTIFY drawChanged)
+    Q_PROPERTY(double drawSegment READ drawSegment NOTIFY drawChanged)
+    Q_PROPERTY(QString drawPlane READ drawPlane NOTIFY drawChanged)
+    Q_PROPERTY(QPointF drawCursorSketch READ drawCursorSketch NOTIFY drawChanged)
+    Q_PROPERTY(QVariantList drawPointsSketch READ drawPointsSketch NOTIFY drawChanged)
+    // 'Cut with...' picking
+    Q_PROPERTY(QStringList pickedTools READ pickedTools NOTIFY toolChanged)
+    Q_PROPERTY(QString pickTarget READ pickTarget NOTIFY toolChanged)
     // camera basis for the ViewCube
     Q_PROPERTY(QVector3D camRight READ camRight NOTIFY cameraChanged)
     Q_PROPERTY(QVector3D camUp READ camUp NOTIFY cameraChanged)
@@ -69,11 +82,27 @@ class ViewportItem : public QQuickItem {
     void setScene(std::shared_ptr<const Scene> s);
     void setGhost(std::shared_ptr<const MeshCpu> g);
     void setRadialProvider(RadialRingProvider p) { radial_rings_ = std::move(p); }
+    /// Refines the radial context from the selection ("selection" -> "sketch" for a selected sketch).
+    void setContextResolver(std::function<QString(const QString&)> f) { context_resolver_ = std::move(f); }
     Vec3 radialPointExact() const { return radial_point_exact_; }
     /// World point -> item coordinates (logical pixels).
     QPointF projectPoint(const Vec3& p) const;
 
     QStringList selection() const { return selection_; }
+    QVariantList drawPoints() const;
+    QPointF drawCursorSketch() const { return draw_.cursor_valid ? QPointF(draw_.cursor[0], draw_.cursor[1]) : QPointF(); }
+    QVariantList drawPointsSketch() const {
+        QVariantList l;
+        for (const auto& p : draw_.pts) l << QPointF(p[0], p[1]);
+        return l;
+    }
+    QPointF drawCursor() const { return draw_.cursor_valid ? sketchToItem(draw_.cursor[0], draw_.cursor[1]) : QPointF(-1e6, -1e6); }
+    QString drawKind() const { return tool_ == "draw" ? draw_.kind : QString(); }
+    QString drawGuide() const { return draw_.guide; }
+    double drawSegment() const;
+    QString drawPlane() const { return draw_.have_plane ? QString(plane_name(draw_.plane)) : QString(); }
+    QStringList pickedTools() const { return picked_tools_; }
+    QString pickTarget() const { return pick_target_; }
     void setSelection(const QStringList& s);
     bool snapVisible() const { return snap_visible_; }
     QPointF snapPos() const { return {snap_.px / dpr(), snap_.py / dpr()}; }
@@ -112,6 +141,18 @@ class ViewportItem : public QQuickItem {
     Q_INVOKABLE QVector3D cubeDirection(double u, double v) const;
     Q_INVOKABLE void frameAll();
     Q_INVOKABLE void startMoveTool();
+    Q_INVOKABLE void startDraw(const QString& kind);   // "polyline" | "rect" | "circle"
+    Q_INVOKABLE void drawTypedLength(double mm);       // next point at this distance along the cursor direction
+    Q_INVOKABLE void drawUndoPoint();
+    Q_INVOKABLE void finishDraw();
+    Q_INVOKABLE void startPickTools(const QString& target, bool single = false);
+    Q_INVOKABLE void finishPick();
+    /// World point -> item coordinates (for QML overlays).
+    Q_INVOKABLE QPointF drawToItem(double x, double y) const { return sketchToItem(x, y); }
+    Q_INVOKABLE QPointF projectWorld(const QVector3D& p) const;
+    /// Item point -> sketch-plane coordinates (x, y in mm) for a plane, or null if parallel.
+    Q_INVOKABLE QVariant planePoint(double x, double y, const QString& plane, double offset) const;
+    Q_INVOKABLE QString pickSketchAt(double x, double y) const;
     Q_INVOKABLE void cancelTool();
     Q_INVOKABLE void radialBegin(QString context);  // at the current pointer position
     Q_INVOKABLE void radialEnd();
@@ -133,6 +174,12 @@ class ViewportItem : public QQuickItem {
     void radialSelected(const QVariantList& path, const QString& context, const QVector3D& point);
     /// Two-point move finished: emit the translation (mm).
     void moveRequested(const QString& name, double dx, double dy, double dz);
+    void drawChanged();
+    /// Drawing finished: points in sketch-plane coordinates (mm).
+    void sketchDrawn(const QString& kind, const QString& plane, double offset, const QVariantList& points, bool closed,
+                     const QString& onObject);
+    void toolsPicked(const QString& target, const QStringList& tools);
+    void objectDoubleClicked(const QString& name);
     void benchmarkFinished(const QString& json);
 
   protected:
@@ -179,9 +226,31 @@ class ViewportItem : public QQuickItem {
     Qt::MouseButton drag_button_ = Qt::NoButton;
     bool dragging_ = false;
     QString tool_ = "select";
+    // drawing
+    struct Draw {
+        QString kind;
+        bool have_plane = false;
+        SketchPlane plane = SketchPlane::XY;
+        double offset = 0;
+        Vec3 o, u, v, n;
+        std::vector<std::array<double, 2>> pts;
+        std::array<double, 2> cursor{0, 0};
+        bool cursor_valid = false;
+        QString guide;
+        QString on;
+    } draw_;
+    QStringList picked_tools_;
+    QString pick_target_;
+    void drawMove(QPointF pos);
+    void drawClick(bool double_click);
+    void setPlaneFrame(SketchPlane p, double offset);
+    std::optional<std::array<double, 2>> rayToPlane(QPointF pos) const;
+    QPointF sketchToItem(double x, double y) const;
     std::optional<Vec3> base_;
     RadialGesture radial_;
     RadialRingProvider radial_rings_;
+    std::function<QString(const QString&)> context_resolver_;
+    bool pick_single_ = false;
     QString radial_context_;
     QVector3D radial_point_;
     Vec3 radial_point_exact_{};

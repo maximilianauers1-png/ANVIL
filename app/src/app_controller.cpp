@@ -18,6 +18,8 @@
 #include "anvil/expr.hpp"
 #include "anvil/fsutil.hpp"
 #include "anvil/journal.hpp"
+#include "anvil/tolerance.hpp"
+#include "anvil/sketch.hpp"
 #include "anvil/version.hpp"
 #include "viewport_item.hpp"
 
@@ -162,6 +164,16 @@ void AppController::attachViewport(ViewportItem* v) {
         return ring;
     });
     connect(v, &ViewportItem::picked, this, &AppController::pick);
+    v->setContextResolver([this](const QString& c) {
+        if (c == "selection" && selection_.size() == 1 && objectKind(selection_.front()) == "Sketch") return QString("sketch");
+        return c;
+    });
+    connect(v, &ViewportItem::sketchDrawn, this, &AppController::onSketchDrawn);
+    connect(v, &ViewportItem::toolsPicked, this, &AppController::onToolsPicked);
+    connect(v, &ViewportItem::objectDoubleClicked, this, [this](const QString& name) {
+        setSelection({name});
+        if (objectKind(name) == "Sketch") emit uiToolRequested("sketch_edit");
+    });
     connect(v, &ViewportItem::radialSelected, this, &AppController::radialPick);
     connect(v, &ViewportItem::moveRequested, this, [this](const QString& name, double dx, double dy, double dz) {
         QStringList a;
@@ -179,6 +191,216 @@ void AppController::attachViewport(ViewportItem* v) {
 }
 
 QString AppController::version() const { return QString(version_string()); }
+
+// ------------------------------------------------------------------ sketches
+QString AppController::objectKind(const QString& name) const {
+    const Object* o = session_->document().state()->find(name.toStdString());
+    return o && o->root ? QString(node_kind_name(o->root->kind)) : QString();
+}
+
+QString AppController::uniqueName(const QString& base) const {
+    auto st = session_->document().state();
+    for (int i = 1;; ++i) {
+        QString n = base + QString::number(i);
+        if (!st->find(n.toStdString())) return n;
+    }
+}
+
+QString AppController::sketchTarget(const QString& sketch) const {
+    QString t = sketch_on_.value(sketch);
+    if (t.isEmpty() || t == sketch) return {};
+    const Object* o = session_->document().state()->find(t.toStdString());
+    return o && o->visible ? t : QString();
+}
+
+void AppController::onSketchDrawn(const QString& kind, const QString& plane, double offset, const QVariantList& pts,
+                                  bool closed, const QString& on) {
+    auto pt = [](const QVariant& v) {
+        QPointF p = v.toPointF();
+        return "(" + reprDouble(p.x()) + ", " + reprDouble(p.y()) + ")";
+    };
+    QString name = uniqueName("Sketch");
+    QString tail = ", plane=" + pyStr(plane) + (offset != 0 ? ", offset=" + reprDouble(offset) + "*mm" : QString()) +
+                   ", name=" + pyStr(name) + ")";
+    QString src;
+    if (kind == "polyline") {
+        QStringList l;
+        for (const auto& v : pts) l << pt(v);
+        src = "sketch_polyline([" + l.join(", ") + "]" + (closed ? ", closed=True" : "") + tail;
+    } else if (kind == "rect" && pts.size() == 2) {
+        QPointF a = pts[0].toPointF(), b = pts[1].toPointF();
+        if (std::abs(a.x() - b.x()) < tol::kConfusionMm || std::abs(a.y() - b.y()) < tol::kConfusionMm) return;  // degenerate
+        src = "sketch_rect(" + pt(pts[0]) + ", " + pt(pts[1]) + tail;
+    } else if (kind == "circle" && pts.size() == 2) {
+        QPointF c = pts[0].toPointF(), q = pts[1].toPointF();
+        double r = std::hypot(q.x() - c.x(), q.y() - c.y());
+        if (r < tol::kConfusionMm) return;
+        src = "sketch_circle(" + pt(pts[0]) + ", r=" + reprDouble(r) + "*mm" + tail;
+    }
+    if (src.isEmpty()) return;
+    if (!on.isEmpty()) sketch_on_[name] = on;
+    select_after_ = name;
+    execute(src, "ui");
+}
+
+void AppController::onToolsPicked(const QString& target, const QStringList& tools) {
+    if (objectKind(target) == "Sketch") {  // 'Cut through' without a known target: cut each picked part
+        QStringList lines;
+        for (const auto& t : tools) {
+            sketch_on_[target] = t;
+            lines << "cut_sketch(" + pyStr(target) + ", " + pyStr(t) + ")";
+        }
+        execute(lines.join("\n"), "ui");
+        return;
+    }
+    QStringList a{pyStr(target)};
+    for (const auto& t : tools) a << pyStr(t);
+    select_after_ = target;
+    execute("cut_with(" + a.join(", ") + ")", "ui");
+}
+
+QVariantMap AppController::sketchInfo(const QString& name) const {
+    QVariantMap out;
+    auto st = session_->document().state();
+    const Object* o = st->find(name.toStdString());
+    if (!o || !o->root || o->root->kind != NodeKind::Sketch || !o->root->sketch) return out;
+    auto [sk, status] = solve_sketch(*o->root->sketch, st->resolver());
+    auto world = [&](double x, double y) {
+        Vec3 w = sk.to_world(x, y);
+        return QVector3D(float(w.x), float(w.y), float(w.z));
+    };
+    out["name"] = name;
+    out["plane"] = QString(plane_name(sk.plane));
+    out["offset"] = sk.offset;
+    out["dof"] = status.dof;
+    out["converged"] = status.converged;
+    out["message"] = QString::fromStdString(status.message);
+    QVariantList pts;
+    for (const auto& [id, p] : sk.points) {
+        QVariantMap m;
+        m["id"] = QString::fromStdString(id);
+        m["x"] = p.x, m["y"] = p.y;
+        m["world"] = world(p.x, p.y);
+        auto it = status.entity_state.find(id);
+        m["state"] = it != status.entity_state.end() ? QString::fromStdString(it->second) : QString("free");
+        pts << m;
+    }
+    out["points"] = pts;
+    QVariantList curves;
+    for (const auto& [id, c] : sk.curves) {
+        QVariantMap m;
+        m["id"] = QString::fromStdString(id);
+        m["kind"] = c.kind == CurveKind::Line ? "line" : c.kind == CurveKind::Circle ? "circle" : "arc";
+        QStringList ps;
+        for (const auto& p : c.pts) ps << QString::fromStdString(p);
+        m["points"] = ps;
+        m["radius"] = c.radius;
+        m["construction"] = c.construction;
+        // label anchor: line midpoint, circle/arc: a point on the curve
+        if (c.kind == CurveKind::Line && c.pts.size() == 2) {
+            const auto &a = sk.points.at(c.pts[0]), &b = sk.points.at(c.pts[1]);
+            m["anchor"] = world((a.x + b.x) / 2, (a.y + b.y) / 2);
+            m["length"] = std::hypot(b.x - a.x, b.y - a.y);
+        } else if (!c.pts.empty()) {
+            const auto& ctr = sk.points.at(c.pts[0]);
+            double r = c.radius;
+            if (c.kind == CurveKind::Arc && c.pts.size() >= 2) {
+                const auto& s0 = sk.points.at(c.pts[1]);
+                r = std::hypot(s0.x - ctr.x, s0.y - ctr.y);
+            }
+            m["anchor"] = world(ctr.x + r * std::numbers::sqrt2 / 2, ctr.y + r * std::numbers::sqrt2 / 2);
+        }
+        curves << m;
+    }
+    out["curves"] = curves;
+    QVariantList cons;
+    for (const auto& [id, k] : sk.constraints) {
+        QVariantMap m;
+        m["id"] = QString::fromStdString(id);
+        m["kind"] = QString(constraint_name(k.kind));
+        QStringList rs;
+        for (const auto& r : k.refs) rs << QString::fromStdString(r);
+        m["refs"] = rs;
+        m["hasValue"] = constraint_has_value(k.kind);
+        bool angle = k.kind == ConstraintKind::LineAngle;
+        m["text"] = !k.value.expr.empty() ? QString::fromStdString(k.value.expr)
+                    : angle ? QString::number(k.value.value * 180 / std::numbers::pi, 'g', 6) + " deg"
+                            : formatLength(k.value.value);
+        auto it = status.constraint_state.find(id);
+        m["state"] = it != status.constraint_state.end() ? QString::fromStdString(it->second) : QString("ok");
+        cons << m;
+    }
+    out["constraints"] = cons;
+    return out;
+}
+
+double AppController::parseLength(const QString& text) const {
+    static const QRegularExpression re(R"(^\s*([-+]?\d*[.,]?\d+(?:[eE][-+]?\d+)?)\s*([a-z]*)\s*$)");
+    auto m = re.match(text);
+    if (!m.hasMatch()) return std::nan("");
+    double v = m.captured(1).replace(',', '.').toDouble();
+    QString u = m.captured(2);
+    if (u.isEmpty()) return v * unit_info(unit_).mm_per_unit;
+    if (u == "inch") u = "in";
+    auto lu = parse_length_unit(u.toStdString());
+    return lu ? v * unit_info(*lu).mm_per_unit : std::nan("");
+}
+
+void AppController::sketchDrag(const QString& sketch, const QString& point, double x, double y) {
+    execute("sketch_move(" + pyStr(sketch) + ", " + pyStr(point) + ", " + reprDouble(x) + "*mm, " + reprDouble(y) +
+                "*mm)",
+            "ui");
+}
+
+namespace {
+// "40" -> 40*<unit>, "40 mm" -> 40*mm, otherwise an expression string
+QString valueLiteral(const QString& text, const QString& unit, bool angle) {
+    QString t = text.trimmed();
+    static const QRegularExpression num(R"(^([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*([a-zA-Zµ°]*)$)");
+    auto m = num.match(t);
+    if (m.hasMatch()) {
+        QString u = m.captured(2);
+        if (u == "°") u = "deg";
+        if (u.isEmpty()) u = angle ? "deg" : unit;
+        if (u == "in") u = "inch";
+        if (u == "µm") u = "um";
+        return m.captured(1) + "*" + u;
+    }
+    return pyStr(t);
+}
+}  // namespace
+
+void AppController::sketchSetDim(const QString& sketch, const QString& constraint, const QString& text) {
+    if (text.trimmed().isEmpty()) return;
+    bool angle = false;
+    if (const Object* o = session_->document().state()->find(sketch.toStdString()))
+        if (o->root && o->root->sketch) {
+            auto it = o->root->sketch->constraints.find(constraint.toStdString());
+            angle = it != o->root->sketch->constraints.end() && it->second.kind == ConstraintKind::LineAngle;
+        }
+    execute("sketch_set(" + pyStr(sketch) + ", " + pyStr(constraint) + ", " + valueLiteral(text, unit(), angle) + ")",
+            "ui");
+}
+
+void AppController::sketchConstrain(const QString& sketch, const QString& kind, const QStringList& refs) {
+    QStringList a{pyStr(sketch), pyStr(kind)};
+    for (const auto& r : refs) a << pyStr(r);
+    execute("sketch_constrain(" + a.join(", ") + ")", "ui");
+}
+
+void AppController::sketchDimension(const QString& sketch, const QString& kind, const QStringList& refs,
+                                    const QString& text) {
+    QStringList a{pyStr(sketch), pyStr(kind)};
+    for (const auto& r : refs) a << pyStr(r);
+    a << valueLiteral(text, unit(), kind == "angle");
+    execute("sketch_dim(" + a.join(", ") + ")", "ui");
+}
+
+void AppController::sketchDelete(const QString& sketch, const QStringList& ids) {
+    QStringList a{pyStr(sketch)};
+    for (const auto& r : ids) a << pyStr(r);
+    execute("sketch_delete(" + a.join(", ") + ")", "ui");
+}
 
 void AppController::setStartupMs(double ms) {
     startup_ms_ = ms;
@@ -246,6 +468,10 @@ void AppController::refreshModels() {
     QStringList sel;
     for (const auto& n : selection_)
         if (st->find(n.toStdString())) sel << n;
+    if (!select_after_.isEmpty() && st->find(select_after_.toStdString())) {
+        sel = {select_after_};
+        select_after_.clear();
+    }
     setSelection(sel);
     // object list (geometry info arrives with the next scene)
     QVariantList objs;
@@ -349,6 +575,27 @@ void AppController::runCommand(const QString& id, const QVector3D& point, bool h
     QString ui = meta["ui"].toString();
     if (ui == "move_tool") {
         if (viewport_) viewport_->startMoveTool();
+        return;
+    }
+    if (ui.startsWith("draw_")) {
+        if (viewport_) viewport_->startDraw(ui.mid(5));
+        return;
+    }
+    if (ui == "pick_tools") {
+        if (selection_.size() >= 2) {  // already chosen: first minus the rest
+            QStringList a;
+            for (const auto& s : selection_) a << pyStr(s);
+            execute("cut_with(" + a.join(", ") + ")", "ui");
+        } else if (viewport_) {
+            viewport_->startPickTools(selection_.front());
+        }
+        return;
+    }
+    if (ui == "sketch_cut") {
+        const QString& sk = selection_.front();
+        QString target = sketchTarget(sk);
+        if (!target.isEmpty()) execute("cut_sketch(" + pyStr(sk) + ", " + pyStr(target) + ")", "ui");
+        else if (viewport_) viewport_->startPickTools(sk, true);  // click the part to cut
         return;
     }
     if (!ui.isEmpty()) {

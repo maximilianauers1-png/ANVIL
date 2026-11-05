@@ -52,6 +52,8 @@ class SelfTest : public QObject {
     void screenshot(const QString& name);
     bool idle() const;
     bool hasObject(const QString& name) const;
+    double objectValue(const QString& name, const QString& key) const;
+    double vol_before_ = 0;
     void check(bool ok, const QString& what);
 
     QQuickWindow* win_;

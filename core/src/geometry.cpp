@@ -497,12 +497,29 @@ struct Evaluator {
         ~RefGuard() { --d; }
     };
 
+    // Mesh-only features (Solidify, Deform, imported meshes) have no exact form.
+    bool has_mesh_only(const NodePtr& n) {
+        if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::ImportedMesh) return true;
+        if (n->kind == NodeKind::Ref) {
+            RefGuard g(ref_depth);
+            return has_mesh_only(deref(n));
+        }
+        for (const auto& c : n->inputs)
+            if (has_mesh_only(c)) return true;
+        return false;
+    }
+
+    // Whole subtree in the B-Rep kernel? Mixed trees (e.g. a filleted part minus
+    // a solidified trace) evaluate their exact subtrees in the worker and combine
+    // the tessellations with Manifold; only a B-Rep feature applied *on top of*
+    // mesh geometry is impossible (brep_json names it).
     bool needs_brep(const NodePtr& n) {
         if (is_brep_kind(n->kind)) return true;
         if (n->kind == NodeKind::Ref) {
             RefGuard g(ref_depth);
             return needs_brep(deref(n));
         }
+        if (has_mesh_only(n)) return false;
         for (const auto& c : n->inputs)
             if (needs_brep(c)) return true;
         return false;
@@ -785,6 +802,11 @@ std::string brep_json(const NodePtr& root, const VariableResolver& vars, const E
         if (n->kind == NodeKind::ImportedMesh)
             throw GeometryError("an imported mesh cannot be combined with B-Rep features (fillet, extrude, ...); "
                                 "mesh-to-solid conversion arrives with the repair tools (M5)");
+        if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform)
+            throw GeometryError(std::string(node_kind_name(n->kind)) +
+                                " produces mesh geometry; exact features (fillet, chamfer, shell, extrude, ...) cannot be "
+                                "applied on top of it. Apply the exact features first, then combine with the " +
+                                node_kind_name(n->kind) + " result");
         std::string kind = node_kind_name(n->kind);
         std::transform(kind.begin(), kind.end(), kind.begin(), [](unsigned char c) { return char(std::tolower(c)); });
         j["k"] = kind;
