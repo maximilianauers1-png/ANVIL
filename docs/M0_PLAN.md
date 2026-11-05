@@ -1,6 +1,6 @@
 # ANVIL – M0: Architektur- und Umsetzungsplan
 
-Stand: 2026-11-05 · Status: **wartet auf Freigabe** (nach M0 wird gestoppt)
+Stand: 2026-11-05 · Status: **freigegeben**; M1 umgesetzt (siehe ADR 0014/0015, `bench/reports/M1.md`)
 
 Dieses Dokument ist die verbindliche Planungsgrundlage. Entscheidungen mit
 Begründung stehen in `docs/adr/`, Risiken in `docs/RISIKEN.md`, Abhängigkeiten
@@ -381,3 +381,11 @@ Abweichung ⇒ Datei verworfen.
    evaluation“), und TRELLIS braucht laut Projekt ≥ 16 GB VRAM. Soll ich
    TRELLIS nur als Opt-in-Plugin mit Lizenzhinweis vorsehen (TripoSR, MIT, als
    Default), oder ganz weglassen?
+
+### Antworten (2026-11-05)
+1. Elegoo Mars 5 Ultra (Resin, 18 µm XY) und Elegoo Neptune (FDM, Modell offen); OrcaSlicer → `docs/DRUCKER.md`.
+2. Tablet: spielt keine Rolle → Tablet-Druck entfällt (ADR 0015).
+3. ASUS-Gaming-Monitor (Auflösung offen); Benchmarks per Skript `scripts/run-benchmarks.ps1`.
+4. Lesart 20 Mio. Voxel bestätigt.
+5. TRELLIS entfällt.
+Zusatz: Upgradefähigkeit → ADR 0014.

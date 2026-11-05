@@ -1,0 +1,222 @@
+{
+    "history": [
+        {
+            "label": "show(cylinder(d=20*mm, h=10*mm))",
+            "origin": "ui",
+            "source": "show(cylinder(d=20*mm, h=10*mm))"
+        },
+        {
+            "label": "edit(\"Cylinder1\", d=25*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder1\", d=25*mm)"
+        },
+        {
+            "label": "edit(\"Cylinder1\", h=3*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder1\", h=3*mm)"
+        },
+        {
+            "label": "edit(\"Cylinder1\", chamfer_top=0.6*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder1\", chamfer_top=0.6*mm)"
+        },
+        {
+            "label": "show(cylinder(d=20*mm, h=10*mm))",
+            "origin": "ui",
+            "source": "show(cylinder(d=20*mm, h=10*mm))"
+        },
+        {
+            "label": "edit(\"Cylinder2\", d=5.1*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder2\", d=5.1*mm)"
+        },
+        {
+            "label": "edit(\"Cylinder2\", h=2.2*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder2\", h=2.2*mm)"
+        },
+        {
+            "label": "subtract('Cylinder1', 'Cylinder2')",
+            "origin": "ui",
+            "source": "subtract('Cylinder1', 'Cylinder2')"
+        }
+    ],
+    "ok": true,
+    "radial_frames_to_visible": 1,
+    "steps": [
+        {
+            "ms": 106,
+            "ok": true,
+            "step": "wait for first frames"
+        },
+        {
+            "ms": 101,
+            "ok": true,
+            "step": "screenshot start"
+        },
+        {
+            "ms": 49,
+            "ok": true,
+            "step": "hover origin snaps"
+        },
+        {
+            "ms": 96,
+            "ok": true,
+            "step": "radial flick creates Cylinder1"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "radial menu was drawable in <= 1 frame"
+        },
+        {
+            "check": "radial menu visible after 1 frame(s)",
+            "ok": true
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "cancel held radial"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "select Cylinder1 by click"
+        },
+        {
+            "ms": 54,
+            "ok": true,
+            "step": "type d = 25"
+        },
+        {
+            "ms": 60,
+            "ok": true,
+            "step": "type h = 3"
+        },
+        {
+            "ms": 53,
+            "ok": true,
+            "step": "type chamfer_top = 0.6"
+        },
+        {
+            "ms": 110,
+            "ok": true,
+            "step": "screenshot base"
+        },
+        {
+            "ms": 47,
+            "ok": true,
+            "step": "deselect"
+        },
+        {
+            "ms": 199,
+            "ok": true,
+            "step": "radial submenu View > Bottom"
+        },
+        {
+            "ms": 72,
+            "ok": true,
+            "step": "screenshot bottom"
+        },
+        {
+            "ms": 49,
+            "ok": true,
+            "step": "hover bottom center"
+        },
+        {
+            "ms": 55,
+            "ok": true,
+            "step": "radial flick creates Cylinder2"
+        },
+        {
+            "ms": 49,
+            "ok": true,
+            "step": "select Cylinder2 in list"
+        },
+        {
+            "ms": 59,
+            "ok": true,
+            "step": "type d = 5.1"
+        },
+        {
+            "ms": 55,
+            "ok": true,
+            "step": "type h = 2.2"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "select Cylinder1"
+        },
+        {
+            "ms": 49,
+            "ok": true,
+            "step": "ctrl-select Cylinder2"
+        },
+        {
+            "ms": 66,
+            "ok": true,
+            "step": "radial flick north subtracts"
+        },
+        {
+            "ms": 43,
+            "ok": true,
+            "step": "iso view"
+        },
+        {
+            "ms": 144,
+            "ok": true,
+            "step": "screenshot result"
+        },
+        {
+            "ms": 40,
+            "ok": true,
+            "step": "select result"
+        },
+        {
+            "ms": 48,
+            "ok": true,
+            "step": "radial flick south opens export"
+        },
+        {
+            "ms": 113,
+            "ok": true,
+            "step": "export dialog checks pass"
+        },
+        {
+            "ms": 77,
+            "ok": true,
+            "step": "click Export"
+        },
+        {
+            "ms": 60,
+            "ok": true,
+            "step": "undo via button"
+        },
+        {
+            "ms": 67,
+            "ok": true,
+            "step": "redo via button"
+        },
+        {
+            "ms": 49,
+            "ok": true,
+            "step": "light theme"
+        },
+        {
+            "ms": 49,
+            "ok": true,
+            "step": "unit inch"
+        },
+        {
+            "ms": 95,
+            "ok": true,
+            "step": "screenshot light"
+        },
+        {
+            "ms": 53,
+            "ok": true,
+            "step": "dark theme + mm"
+        }
+    ]
+}

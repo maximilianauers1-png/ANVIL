@@ -1,6 +1,6 @@
 # Drittanbieter-Komponenten
 
-Stand der Prüfung: 2026-11-05. Spalte „Status“: **verifiziert** = durch
+Stand der Prüfung: 2026-11-05 (M1-Aktualisierung). Spalte „Status“: **verifiziert** = durch
 Recherche mit Quelle belegt; **zu prüfen** = aus Vorwissen, wird beim Pinnen
 in M1 (vcpkg-Baseline, Lizenzdatei im Paket) bestätigt. Versionen werden in
 `vcpkg.json` (`overrides`) bzw. `requirements-*.txt` (`--require-hashes`)
@@ -32,6 +32,23 @@ festgeschrieben. Nutzung: privat, Einzelnutzer, Schweden.
 | Tracy (nur Dev) | 0.11+ | BSD-3-Clause | statisch | zu prüfen |
 | Catch2, RapidCheck, Google Benchmark (nur Tests) | v3 / aktuell / 1.9+ | BSL-1.0 / BSD-2 / Apache-2.0 | – | zu prüfen |
 
+## Tatsächlich in M1 eingebunden (gepinnt in `cmake/Versions.cmake`)
+
+| Komponente | Version | Lizenz | Bezug |
+|---|---|---|---|
+| Manifold | v3.5.4 (Git-Tag, Commit `ce50d780`) | Apache-2.0 | FetchContent (zieht Clipper2 Commit `46f63917`, BSL-1.0) |
+| pybind11 | v3.0.4 | BSD-3-Clause | FetchContent |
+| Catch2 | v3.16.1 | BSL-1.0 | FetchContent (nur Tests) |
+| Vulkan-Headers | vulkan-sdk-1.4.363.0 | Apache-2.0 / MIT | FetchContent, nur wenn kein SDK vorhanden |
+| Qt | 6.8.3 (Windows-Ziel; Entwicklung Linux 6.4.2) | LGPL-3.0, dynamisch | aqtinstall 3.3.0 (MIT) aus download.qt.io, ohne Konto |
+| CPython | 3.11 (aus lokaler Installation kopiert, ohne Netzwerkmodule) | PSF-2.0 | `scripts/build-windows.ps1` |
+| Mesa Lavapipe | 25.2 | MIT | nur Linux-Tests (Software-Vulkan), nicht ausgeliefert |
+| GitHub Actions (nur CI-Kompilierprüfung) | actions/checkout@v4, setup-python@v5, upload-artifact@v4, jurplel/install-qt-action@v4, ilammy/msvc-dev-cmd@v1 | MIT | manuell ausgelöst; sieht nur Quellcode |
+
+Embree, OpenCASCADE, OpenVDB, oneTBB, Eigen, AMGCL, lib3mf, VMA sind in M1
+**nicht** eingebunden (siehe ADR 0015); ihre Zeilen oben gelten ab dem
+jeweiligen Meilenstein.
+
 ## KI-Worker (Python)
 
 | Komponente | Version | Lizenz | Status / Quelle |
@@ -49,7 +66,7 @@ festgeschrieben. Nutzung: privat, Einzelnutzer, Schweden.
 | Modell | Lizenz | EU | Entscheidung |
 |---|---|---|---|
 | TripoSR | MIT ([Modellkarte](https://huggingface.co/stabilityai/TripoSR)) | ja | Default |
-| TRELLIS / TRELLIS.2 | Code MIT; nvdiffrast/nvdiffrec: NVIDIA Source Code License (research/evaluation) ([Issue #298](https://github.com/microsoft/TRELLIS/issues/298), [Comfy-Blog](https://blog.comfy.org/p/trellis2-and-pixal3d-are-now-native)) | unklar | Opt-in nach Rückfrage F5 |
+| TRELLIS / TRELLIS.2 | Code MIT; nvdiffrast/nvdiffrec: NVIDIA Source Code License (research/evaluation) ([Issue #298](https://github.com/microsoft/TRELLIS/issues/298), [Comfy-Blog](https://blog.comfy.org/p/trellis2-and-pixal3d-are-now-native)) | unklar | **nicht eingebunden** (Nutzerentscheidung) |
 | Hunyuan3D 2.0/2.1 | Tencent Community License, Territorium schließt EU, UK, Südkorea aus ([LICENSE](https://huggingface.co/tencent/Hunyuan3D-2/blob/main/LICENSE)) | **nein** | nicht eingebunden |
 
 ## Lizenzpflichten (Einzelnutzer)

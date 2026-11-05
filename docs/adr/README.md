@@ -18,3 +18,5 @@ Format: Kontext · Entscheidung · Alternativen · Messung. Eine Entscheidung
 | [0011](0011-fem-elementtyp.md) | FEM: T10, AMG-PCG, Validierung | – |
 | [0012](0012-generative-3d-lizenzen.md) | Generative 3D-Modelle nach Lizenz | – |
 | [0013](0013-build-toolchain.md) | Build und Toolchain | – |
+| [0014](0014-upgradefaehigkeit.md) | Upgradefähigkeit (Formate, API, Plugins, Offline-Updates) | – |
+| [0015](0015-m1-abweichungen.md) | Abweichungen/Präzisierungen in M1 mit Messwerten | – |

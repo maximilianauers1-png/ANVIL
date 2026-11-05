@@ -7,13 +7,13 @@ Bewertung: Wahrscheinlichkeit (W) × Auswirkung (A), je 1–5.
 | R1 | Qt Quick + eigener Vulkan-Renderer im selben Pass erreicht p99 ≤ 16,7 ms nicht (Sync-Stalls, Qt-Scene-Graph-Kosten) | 2 | 5 | **G1/G4** in M1, Woche 1 – vor allen Features | Fallback-Kaskade ADR 0002 (RhiItem → RenderControl → eigene GPU-UI) |
 | R2 | Kaltstart > 3 s (Qt-DLLs, NVIDIA-Treiberinit 0,2–0,5 s, QML, Python) | 3 | 3 | **G3**: Messung mit ETW/`QElapsedTimer` je Phase; Worker lazy; Pipeline-Cache; QML AOT | Splash mit funktionsfähigem Viewport ≠ Ziel; stattdessen: Treiberinit parallel zu Qt-Init, DLL-Delay-Load |
 | R3 | Radialmenü > 1 Frame durch QML-Sync | 2 | 4 | **G2**; Menü vorinstanziiert | Menü als nativer Overlay-Pass im Viewport-Renderer |
-| R4 | Manifold nicht deterministisch über Threads → UI/Skript nicht bitgleich | 2 | 3 | Property-Test ADR 0003 | Kanonische Ergebnis-Sortierung vor Hash; Abnahme auf geometrische Gleichheit (Hausdorff = 0) |
+| R4 | Manifold nicht deterministisch → UI/Skript nicht bitgleich | 1 | 3 | **gemessen M1:** serielles Backend, UI- und Skript-STL bitgleich (SHA-256), Determinismustest | – |
 | R5 | OCCT-Abstürze/Hänger | 4 | 2 | Worker-Isolation (ADR 0001), Timeouts | – (bereits mitigiert) |
 | R6 | PyTorch/Triton auf Windows + sm_120 instabil | 3 | 3 | Setup-Check `get_arch_list()`; ONNX Runtime als Inferenzpfad | Training in WSL2 |
-| R7 | TRELLIS passt nicht in 12 GB VRAM; Lizenz unklar | 4 | 2 | TripoSR Default (ADR 0012) | TRELLIS weglassen |
-| R8 | Sculpt-Ziel missverstanden (A3) | 3 | 4 | Rückfrage F4 | Out-of-Core-Streaming |
-| R9 | Selbstschnitt-Test bei 5 M Dreiecken zu langsam für interaktiven Export | 3 | 2 | Embree-BVH, parallel; Abschätzung O(N log N), Ziel < 2 s bei 5 M | Inkrementell (nur geänderte Regionen, Cache je DAG-Knoten) |
-| R10 | Agent-Umgebung ohne Windows/GPU: Latenzbelege nur auf Nutzermaschine | 5 | 3 | `tools/run_benchmarks.ps1` ab M1; Lavapipe für Funktionstests | Self-hosted Runner (F3) |
+| R7 | TRELLIS passt nicht in 12 GB VRAM; Lizenz unklar | – | – | **geschlossen:** TRELLIS entfällt (Nutzer) | – |
+| R8 | Sculpt-Ziel missverstanden (A3) | – | – | **geschlossen:** 20 Mio. Voxel bestätigt | – |
+| R9 | Exportprüfung bei 5 M Dreiecken zu langsam | 3 | 2 | **gemessen M1:** 6,6 s auf 4 vCPU Xeon 2,1 GHz (vorher 18,6 s); Ziel < 2 s auf Zielsystem noch offen | Baum-gegen-Baum-Selbstschnitt, parallele Topologie, Prüfergebnis je DAG-Knoten cachen |
+| R10 | Agent-Umgebung ohne Windows/GPU: Latenzbelege nur auf Nutzermaschine | 5 | 3 | `scripts/run-benchmarks.ps1` (M1); Lavapipe für Funktionstests | Self-hosted Runner (F3) |
 | R11 | Python 3.11 Security-EOL Okt. 2027 | 5 | 1 | Bewusst akzeptiert | Migration 3.12/3.13 per ADR |
 | R12 | LGPL-Pflichten (Qt, OCCT) bei Weitergabe | 1 | 2 | Dynamisch linken, Lizenztexte beilegen | – (Einzelnutzer) |
 | R13 | Umfang: M4 (Mini Forge) und M6 (Neural Lab) sind je eigenständige Produkte | 4 | 3 | Strikte Abnahmekriterien, keine Nebenfeatures | Priorisierung mit Nutzer nach M3 |

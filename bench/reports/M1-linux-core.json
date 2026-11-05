@@ -1,0 +1,17 @@
+{
+  "anvil": "0.1.0",
+  "threads": 4,
+  "triangles": 5018460,
+  "results_ms": {
+    "stl decode + weld": 1730.63,
+    "validate (all checks)": 6585.3,
+    "validate (topology only)": 1291.44,
+    "feature edges": 1035.84,
+    "bvh build": 1305.23,
+    "raycast (per ray, us)": 1.42751,
+    "snap query p50 (ms)": 0.00617,
+    "snap query p99 (ms)": 2.93849,
+    "magnet base eval (Manifold, cold)": 1.97052,
+    "stl encode (BS-5M, binary)": 566.504
+  }
+}
