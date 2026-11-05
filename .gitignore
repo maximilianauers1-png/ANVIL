@@ -1,0 +1,7 @@
+bench/out/
+__pycache__/
+*.pyc
+build/
+out/
+.vs/
+vcpkg_installed/
