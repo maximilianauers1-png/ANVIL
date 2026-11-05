@@ -64,6 +64,7 @@ struct Mesh {
 
 /// Edges where the dihedral angle exceeds `angle_rad` (plus boundary edges),
 /// as vertex index pairs. Used for rendering outlines and snapping.
+/// A negative angle returns every edge once (wireframe).
 std::vector<std::array<std::uint32_t, 2>> feature_edges(const Mesh& m, double angle_rad);
 
 }  // namespace anvil

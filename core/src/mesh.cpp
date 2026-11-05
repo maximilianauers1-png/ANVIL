@@ -69,7 +69,7 @@ std::vector<std::array<std::uint32_t, 2>> feature_edges(const Mesh& m, double an
     for (std::size_t i = 0; i < nh;) {
         std::size_t j = i + 1;
         while (j < nh && keys[j] == keys[i]) ++j;
-        bool feature = j - i != 2 || dot(normal(hes[i] / 3), normal(hes[i + 1] / 3)) < cos_thr;
+        bool feature = angle_rad < 0 || j - i != 2 || dot(normal(hes[i] / 3), normal(hes[i + 1] / 3)) < cos_thr;
         if (feature) out.push_back({std::uint32_t(keys[i] / N), std::uint32_t(keys[i] % N)});  // sorted order
         i = j;
     }

@@ -7,6 +7,8 @@
 #include <QJsonObject>
 #include <QQuickWindow>
 #include <QRunnable>
+#include <QSGSimpleTextureNode>
+#include <QtQuick/qsgtexture_platform.h>
 #include <QTimer>
 
 #include <algorithm>
@@ -44,8 +46,10 @@ double percentile(std::vector<double> v, double p) {
 ViewportItem::ViewportItem(QQuickItem* parent) : QQuickItem(parent) {
     setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton | Qt::MiddleButton);
     setAcceptHoverEvents(true);
+    setFlag(ItemHasContents, true);
     setFlag(ItemAcceptsInputMethod, false);
     connect(this, &QQuickItem::windowChanged, this, &ViewportItem::handleWindowChanged);
+    connect(this, &ViewportItem::styleChanged, this, &ViewportItem::requestFrame);
     frame_ms_.assign(kFrameWindow, -1.0);
     // status bar values (GPU memory, triangles, device) refresh even when idle
     auto* t = new QTimer(this);
@@ -79,13 +83,7 @@ void ViewportItem::sync() {
                 qCritical("viewport renderer: %s", e.what());
             }
         }, Qt::DirectConnection);
-        connect(window(), &QQuickWindow::beforeRenderPassRecording, window(), [r] {
-            try {
-                r->before_render_pass();
-            } catch (const std::exception& e) {
-                qCritical("viewport renderer: %s", e.what());
-            }
-        }, Qt::DirectConnection);
+
     }
     FrameInput in;
     in.cam = cam_;
@@ -99,6 +97,9 @@ void ViewportItem::sync() {
     in.edge[0] = float(edge_.redF()), in.edge[1] = float(edge_.greenF()), in.edge[2] = float(edge_.blueF());
     in.edge[3] = float(edge_.alphaF());
     in.show_grid = show_grid_;
+    in.mesh_view = mesh_view_;
+    in.wire[0] = float(wire_.redF()), in.wire[1] = float(wire_.greenF()), in.wire[2] = float(wire_.blueF());
+    in.wire[3] = float(wire_.alphaF());
     // adaptive grid: minor lines at least ~10 px apart, steps of 10
     double wpp = cam_.world_per_pixel(cam_.distance) * k / std::max(k, 1.0);
     double step = 0.1;
@@ -132,9 +133,41 @@ void ViewportItem::sync() {
     renderer_->set_input(std::move(in));
 }
 
+QSGNode* ViewportItem::updatePaintNode(QSGNode* old, UpdatePaintNodeData*) {
+    // Render thread, after sync(): size the offscreen image and show it as a texture.
+    auto* node = static_cast<QSGSimpleTextureNode*>(old);
+    if (!renderer_) return node;
+    const double k = dpr();
+    QSize px(int(std::round(width() * k)), int(std::round(height() * k)));
+    VkImage img = VK_NULL_HANDLE;
+    try {
+        img = renderer_->prepare(px);
+    } catch (const std::exception& e) {
+        qCritical("viewport renderer: %s", e.what());
+    }
+    if (!img) {
+        delete node;
+        shown_image_ = VK_NULL_HANDLE;
+        return nullptr;
+    }
+    if (!node) {
+        node = new QSGSimpleTextureNode;
+        node->setOwnsTexture(true);
+        node->setFiltering(QSGTexture::Nearest);  // 1:1 device pixels
+    }
+    if (img != shown_image_) {
+        node->setTexture(QNativeInterface::QSGVulkanTexture::fromNative(
+            img, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, window(), px));
+        shown_image_ = img;
+    }
+    node->setRect(boundingRect());
+    return node;
+}
+
 void ViewportItem::cleanup() {
     delete renderer_;  // render thread, context still valid
     renderer_ = nullptr;
+    shown_image_ = VK_NULL_HANDLE;
 }
 
 void ViewportItem::releaseResources() {
@@ -143,6 +176,7 @@ void ViewportItem::releaseResources() {
 }
 
 void ViewportItem::requestFrame() {
+    update();  // re-runs updatePaintNode (size changes); the texture content changes every frame anyway
     if (window()) window()->update();
 }
 

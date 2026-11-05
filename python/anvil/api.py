@@ -23,7 +23,7 @@ __all__ = [
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
     "subtract", "union", "intersect", "duplicate", "clear", "export_stl", "import_stl", "import_mesh",
-    "check", "info", "save", "load", "view", "theme", "select", "set_unit", "GeometryError",
+    "check", "info", "save", "load", "view", "theme", "display", "select", "set_unit", "GeometryError",
 ]
 
 GeometryError = _a.GeometryError
@@ -428,10 +428,17 @@ def view(name: str = "iso", direction=None):
 
 
 def theme(name: str):
-    """UI theme: 'dark' or 'light' (applied live)."""
-    if name not in ("dark", "light"):
-        raise ValueError("theme(): 'dark' or 'light'")
+    """UI theme: 'dark', 'studio' (dark controls, light scene) or 'light' (applied live)."""
+    if name not in ("dark", "studio", "light"):
+        raise ValueError("theme(): 'dark', 'studio' or 'light'")
     _a.ui_request(_json.dumps({"request": "theme", "name": name}))
+
+
+def display(mode: str = "shaded"):
+    """Viewport display: 'shaded' or 'mesh' (every triangle edge overlaid)."""
+    if mode not in ("shaded", "mesh"):
+        raise ValueError("display(): 'shaded' or 'mesh'")
+    _a.ui_request(_json.dumps({"request": "display", "mode": mode}))
 
 
 def select(*names):

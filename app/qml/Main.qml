@@ -50,6 +50,8 @@ ApplicationWindow {
                     backgroundColor: Theme.viewportBg
                     gridColor: Theme.grid
                     edgeColor: Theme.edge
+                    wireColor: Theme.wire
+                    meshView: App.display === "mesh"
                     objectColors: Theme.objectColors
 
                     // Radial menu key (default Space): hold, flick, release.
@@ -113,9 +115,9 @@ ApplicationWindow {
                     anchors.centerIn: parent
                     spacing: 6
                     opacity: 0.85
-                    ALabel { anchors.horizontalCenter: parent.horizontalCenter; text: "Right-click and drag (or hold " + App.radialKey + ") for the radial menu"; dim: true }
-                    ALabel { anchors.horizontalCenter: parent.horizontalCenter; text: "Type in the command bar:  name to search  ·  > Python  ·  ? local AI"; dim: true }
-                    ALabel { anchors.horizontalCenter: parent.horizontalCenter; text: "Drop STL files here"; dim: true }
+                    ALabel { anchors.horizontalCenter: parent.horizontalCenter; text: "Right-click and drag (or hold " + App.radialKey + ") for the radial menu"; color: Theme.sceneText }
+                    ALabel { anchors.horizontalCenter: parent.horizontalCenter; text: "Type in the command bar:  name to search  ·  > Python  ·  ? local AI"; color: Theme.sceneText }
+                    ALabel { anchors.horizontalCenter: parent.horizontalCenter; text: "Drop STL files here"; color: Theme.sceneText }
                 }
                 DropArea {
                     anchors.fill: parent

@@ -7,7 +7,8 @@ namespace anvil {
 
 struct Settings {
     int version = 1;
-    QString theme = "dark";
+    QString theme = "studio";     // dark controls, light scene (user preference, M1 feedback)
+    QString display = "shaded";   // or "mesh" (triangle edges overlaid)
     QString unit = "mm";
     QString radial_key = "Space";
     double chord_mm = 0.01;           // viewport + export default (tol::kDefaultChordMm)

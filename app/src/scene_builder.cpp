@@ -57,6 +57,7 @@ std::shared_ptr<const MeshCpu> SceneBuilder::to_gpu(const std::shared_ptr<const 
     for (std::size_t i = 0; i < m->F.size(); ++i)
         for (int k = 0; k < 3; ++k) g->tris[3 * i + k] = m->F[i][k];
     for (const auto& e : feature_edges(*m, tol::kFeatureEdgeAngleRad)) g->edges.push_back(e[0]), g->edges.push_back(e[1]);
+    for (const auto& e : feature_edges(*m, -1.0)) g->wire.push_back(e[0]), g->wire.push_back(e[1]);  // all edges
     gpu_cache_[m.get()] = {m, g};
     return g;
 }

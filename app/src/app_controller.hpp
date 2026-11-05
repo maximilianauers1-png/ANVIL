@@ -35,6 +35,7 @@ class AppController : public QObject {
     Q_PROPERTY(QString unit READ unit NOTIFY unitChanged)
     Q_PROPERTY(QString theme READ theme NOTIFY themeChanged)
     Q_PROPERTY(QString mode READ mode WRITE setMode NOTIFY modeChanged)
+    Q_PROPERTY(QString display READ display NOTIFY displayChanged)
     Q_PROPERTY(QString consoleText READ consoleText NOTIFY consoleChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
@@ -69,6 +70,7 @@ class AppController : public QObject {
     QString unit() const { return QString(unit_info(unit_).symbol); }
     QString theme() const { return theme_; }
     QString mode() const { return mode_; }
+    QString display() const { return display_; }
     void setMode(const QString& m);
     QString consoleText() const { return console_; }
     QString lastError() const { return last_error_; }
@@ -119,6 +121,7 @@ class AppController : public QObject {
     // --- UI state as Python commands ------------------------------------------------
     Q_INVOKABLE void requestUnit(const QString& symbol);
     Q_INVOKABLE void requestTheme(const QString& name);
+    Q_INVOKABLE void requestDisplay(const QString& mode);
     Q_INVOKABLE void requestView(const QString& name);
     Q_INVOKABLE void requestViewDirection(const QVector3D& d);
 
@@ -147,6 +150,7 @@ class AppController : public QObject {
     void unitChanged();
     void themeChanged();
     void modeChanged();
+    void displayChanged();
     void consoleChanged();
     void lastErrorChanged();
     void busyChanged();
@@ -189,6 +193,7 @@ class AppController : public QObject {
     LengthUnit unit_ = LengthUnit::Millimeter;
     QString theme_ = "dark";
     QString mode_ = "Design";
+    QString display_ = "shaded";
     QString console_, last_error_, gpu_info_, hw_warning_;
     int pending_ = 0;
     QString recovery_journal_, recovery_info_, autosave_info_, doc_path_;

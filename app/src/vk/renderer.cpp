@@ -104,13 +104,10 @@ ViewportRenderer::~ViewportRenderer() {
         if (d.mem) df_->vkFreeMemory(dev_, d.mem, nullptr);
     }
     destroy_targets();
-    for (VkPipeline p : {mesh_pipe_, ghost_pipe_, edge_pipe_, grid_pipe_, comp_pipe_})
+    for (VkPipeline p : {mesh_pipe_, ghost_pipe_, edge_pipe_, grid_pipe_})
         if (p) df_->vkDestroyPipeline(dev_, p, nullptr);
-    for (VkPipelineLayout l : {mesh_layout_, grid_layout_, comp_layout_})
+    for (VkPipelineLayout l : {mesh_layout_, grid_layout_})
         if (l) df_->vkDestroyPipelineLayout(dev_, l, nullptr);
-    if (comp_pool_) df_->vkDestroyDescriptorPool(dev_, comp_pool_, nullptr);
-    if (comp_dsl_) df_->vkDestroyDescriptorSetLayout(dev_, comp_dsl_, nullptr);
-    if (sampler_) df_->vkDestroySampler(dev_, sampler_, nullptr);
     if (rp_) df_->vkDestroyRenderPass(dev_, rp_, nullptr);
     if (queries_) df_->vkDestroyQueryPool(dev_, queries_, nullptr);
 }
@@ -198,22 +195,6 @@ void ViewportRenderer::init() {
     rpi.pDependencies = deps;
     check(df_->vkCreateRenderPass(dev_, &rpi, nullptr, &rp_), "vkCreateRenderPass");
 
-    VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-    si.magFilter = si.minFilter = VK_FILTER_NEAREST;  // 1:1 pixel copy
-    si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    check(df_->vkCreateSampler(dev_, &si, nullptr, &sampler_), "vkCreateSampler");
-    VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    VkDescriptorSetLayoutCreateInfo dli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    dli.bindingCount = 1;
-    dli.pBindings = &b;
-    check(df_->vkCreateDescriptorSetLayout(dev_, &dli, nullptr, &comp_dsl_), "vkCreateDescriptorSetLayout");
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16};
-    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    pi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    pi.maxSets = 16;
-    pi.poolSizeCount = 1;
-    pi.pPoolSizes = &ps;
-    check(df_->vkCreateDescriptorPool(dev_, &pi, nullptr, &comp_pool_), "vkCreateDescriptorPool");
 
     if (have_ts_) {
         VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
@@ -313,10 +294,6 @@ void ViewportRenderer::create_pipelines() {
     VkPushConstantRange gpr{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(GridPC)};
     li.pPushConstantRanges = &gpr;
     check(df_->vkCreatePipelineLayout(dev_, &li, nullptr, &grid_layout_), "layout");
-    VkPipelineLayoutCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    ci.setLayoutCount = 1;
-    ci.pSetLayouts = &comp_dsl_;
-    check(df_->vkCreatePipelineLayout(dev_, &ci, nullptr, &comp_layout_), "layout");
 
     using namespace spv;
     const auto GE = VK_COMPARE_OP_GREATER_OR_EQUAL;  // reversed Z
@@ -396,20 +373,6 @@ void ViewportRenderer::ensure_targets(QSize px) {
     fi.layers = 1;
     check(df_->vkCreateFramebuffer(dev_, &fi, nullptr, &fb_), "vkCreateFramebuffer");
 
-    // New descriptor set (the old one may still be in use by a frame in flight).
-    if (comp_set_) retired_sets_.push_back({frame_, comp_set_});
-    VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    dai.descriptorPool = comp_pool_;
-    dai.descriptorSetCount = 1;
-    dai.pSetLayouts = &comp_dsl_;
-    check(df_->vkAllocateDescriptorSets(dev_, &dai, &comp_set_), "vkAllocateDescriptorSets");
-    VkDescriptorImageInfo info{sampler_, msaa ? resolve_view_ : color_view_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w.dstSet = comp_set_;
-    w.descriptorCount = 1;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w.pImageInfo = &info;
-    df_->vkUpdateDescriptorSets(dev_, 1, &w, 0, nullptr);
 }
 
 ViewportRenderer::GpuBuf ViewportRenderer::make_buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool host_visible,
@@ -482,7 +445,9 @@ void ViewportRenderer::upload_loop() {
         g.pos_off = 0;
         g.tri_off = align4(m.pos.size() * 4);
         g.edge_off = g.tri_off + align4(m.tris.size() * 4);
-        VkDeviceSize total = std::max<VkDeviceSize>(g.edge_off + m.edges.size() * 4, 16);
+        g.wire_off = g.edge_off + align4(m.edges.size() * 4);
+        VkDeviceSize total = std::max<VkDeviceSize>(g.wire_off + m.wire.size() * 4, 16);
+        g.wire_count = std::uint32_t(m.wire.size());
         g.tri_count = std::uint32_t(m.tris.size());
         g.edge_count = std::uint32_t(m.edges.size());
         try {
@@ -496,6 +461,7 @@ void ViewportRenderer::upload_loop() {
             std::memcpy(bytes + g.pos_off, m.pos.data(), m.pos.size() * 4);
             std::memcpy(bytes + g.tri_off, m.tris.data(), m.tris.size() * 4);
             std::memcpy(bytes + g.edge_off, m.edges.data(), m.edges.size() * 4);
+            std::memcpy(bytes + g.wire_off, m.wire.data(), m.wire.size() * 4);
             df_->vkUnmapMemory(dev_, g.host.mem);
         } catch (const std::exception&) {
             destroy_now(g.host);
@@ -540,6 +506,13 @@ void ViewportRenderer::collect_finished_uploads(VkCommandBuffer cb) {
     }
 }
 
+VkImage ViewportRenderer::prepare(QSize px) {
+    if (!inited_) init();
+    if (px.width() < 1 || px.height() < 1) return VK_NULL_HANDLE;
+    ensure_targets(px);
+    return resolve_ ? resolve_ : color_;
+}
+
 void ViewportRenderer::before_rendering() {
     if (!inited_) init();
     ++frame_;
@@ -553,11 +526,6 @@ void ViewportRenderer::before_rendering() {
         if (d.view) df_->vkDestroyImageView(dev_, d.view, nullptr);
         if (d.img) df_->vkDestroyImage(dev_, d.img, nullptr);
         if (d.mem) df_->vkFreeMemory(dev_, d.mem, nullptr);
-        return true;
-    });
-    std::erase_if(retired_sets_, [&](auto& s) {
-        if (s.first + std::uint64_t(fif) + 1 > frame_) return false;
-        df_->vkFreeDescriptorSets(dev_, comp_pool_, 1, &s.second);
         return true;
     });
 
@@ -595,7 +563,10 @@ void ViewportRenderer::before_rendering() {
         } else ++it;
     }
 
-    ensure_targets(px);
+    if (px != size_ || !fb_) {  // prepare() (sync phase) did not size the targets for this frame
+        window_->endExternalCommands();
+        return;
+    }
     const int slot = int(frame_ % kMaxFrameSlots);
     if (have_ts_) {
         std::uint64_t ts[2];
@@ -628,18 +599,22 @@ void ViewportRenderer::before_rendering() {
     const Mat4 P = cam.projection(), V = cam.view_rotation(), VP = mul(P, V);
     const Vec3 eye = cam.eye();
 
-    auto draw = [&](const DrawItem& it, VkPipeline pipe, bool edges) {
+    enum Pass { Faces, Features, Wire };
+    auto draw = [&](const DrawItem& it, VkPipeline pipe, Pass pass) {
         auto m = meshes_.find(it.mesh->key);
         if (m == meshes_.end()) return;
         const GpuMesh& g = m->second;
-        if (edges && !g.edge_count) return;
+        const bool lines = pass != Faces;
+        const std::uint32_t count = pass == Faces ? g.tri_count : pass == Features ? g.edge_count : g.wire_count;
+        const VkDeviceSize ioff = pass == Faces ? g.tri_off : pass == Features ? g.edge_off : g.wire_off;
+        if (!count) return;
         VkBuffer buf = g.dev.buf ? g.dev.buf : g.host.buf;
         MeshPC pc{};
         to_float(VP, pc.viewProj);
         Vec3 off = it.mesh->origin + it.extra_offset - eye;  // double, then float (camera-relative)
         pc.offset[0] = float(off.x), pc.offset[1] = float(off.y), pc.offset[2] = float(off.z);
-        if (edges) {
-            std::memcpy(pc.color, in_.edge, sizeof pc.color);
+        if (lines) {
+            std::memcpy(pc.color, pass == Wire ? in_.wire : in_.edge, sizeof pc.color);
             // ~2 pixels of depth bias (see edge.vert)
             const double px_angle = 2.0 * std::tan(cam.fov_y / 2) / std::max(cam.height, 1.0);
             pc.params[1] = cam.ortho ? 0.f : float(2.0 * px_angle);
@@ -653,14 +628,17 @@ void ViewportRenderer::before_rendering() {
                                 sizeof pc, &pc);
         VkDeviceSize vo = g.pos_off;
         df_->vkCmdBindVertexBuffers(cb, 0, 1, &buf, &vo);
-        df_->vkCmdBindIndexBuffer(cb, buf, edges ? g.edge_off : g.tri_off, VK_INDEX_TYPE_UINT32);
-        df_->vkCmdDrawIndexed(cb, edges ? g.edge_count : g.tri_count, 1, 0, 0, 0);
-        if (!edges) tris += g.tri_count / 3;
+        df_->vkCmdBindIndexBuffer(cb, buf, ioff, VK_INDEX_TYPE_UINT32);
+        df_->vkCmdDrawIndexed(cb, count, 1, 0, 0, 0);
+        if (!lines) tris += g.tri_count / 3;
     };
     for (const auto& it : in_.items)
-        if (it.mesh && !it.ghost) draw(it, mesh_pipe_, false);
+        if (it.mesh && !it.ghost) draw(it, mesh_pipe_, Faces);
+    if (in_.mesh_view)
+        for (const auto& it : in_.items)
+            if (it.mesh && !it.ghost) draw(it, edge_pipe_, Wire);
     for (const auto& it : in_.items)
-        if (it.mesh && !it.ghost && it.edges) draw(it, edge_pipe_, true);
+        if (it.mesh && !it.ghost && it.edges) draw(it, edge_pipe_, Features);
     if (in_.show_grid) {
         GridPC g{};
         to_float(inverse(VP), g.invViewProj);
@@ -676,37 +654,13 @@ void ViewportRenderer::before_rendering() {
         df_->vkCmdDraw(cb, 3, 1, 0, 0);
     }
     for (const auto& it : in_.items)
-        if (it.mesh && it.ghost) draw(it, ghost_pipe_, false);
+        if (it.mesh && it.ghost) draw(it, ghost_pipe_, Faces);
     df_->vkCmdEndRenderPass(cb);
     if (have_ts_) df_->vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, queries_, 2 * slot + 1);
     window_->endExternalCommands();
     stats_->triangles = tris;
     ++stats_->frames;
     drew_offscreen_ = true;
-}
-
-void ViewportRenderer::before_render_pass() {
-    if (!drew_offscreen_) return;
-    QSGRendererInterface* rif = window_->rendererInterface();
-    VkRenderPass rp = *static_cast<VkRenderPass*>(rif->getResource(window_, QSGRendererInterface::RenderPassResource));
-    if (rp != comp_rp_) {
-        if (comp_pipe_) df_->vkDestroyPipeline(dev_, comp_pipe_, nullptr);  // only on render pass change
-        comp_pipe_ = make_pipeline(spv::fullscreen_vert, sizeof spv::fullscreen_vert, spv::composite_frag,
-                                   sizeof spv::composite_frag, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false, false, false,
-                                   VK_COMPARE_OP_ALWAYS, rp, VK_SAMPLE_COUNT_1_BIT, comp_layout_);
-        comp_rp_ = rp;
-    }
-    VkCommandBuffer cb = *static_cast<VkCommandBuffer*>(rif->getResource(window_, QSGRendererInterface::CommandListResource));
-    window_->beginExternalCommands();
-    const QRectF& r = in_.rect_px;
-    VkViewport vp{float(r.x()), float(r.y()), float(r.width()), float(r.height()), 0.f, 1.f};
-    VkRect2D sc{{int(r.x()), int(r.y())}, {std::uint32_t(r.width()), std::uint32_t(r.height())}};
-    df_->vkCmdSetViewport(cb, 0, 1, &vp);
-    df_->vkCmdSetScissor(cb, 0, 1, &sc);
-    df_->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, comp_pipe_);
-    df_->vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, comp_layout_, 0, 1, &comp_set_, 0, nullptr);
-    df_->vkCmdDraw(cb, 3, 1, 0, 0);
-    window_->endExternalCommands();
 }
 
 }  // namespace anvil

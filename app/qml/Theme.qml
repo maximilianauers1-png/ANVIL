@@ -2,46 +2,58 @@ pragma Singleton
 import QtQuick
 import Anvil.Native
 
-// Design tokens. Every UI color/size comes from here; dark/light switch live.
+// Design tokens. Every UI color/size comes from here; themes switch live.
+//   dark   - dark controls, dark scene
+//   studio - dark controls, light scene, grey parts (default)
+//   light  - light controls, light scene (muted, not paper-white)
 QtObject {
-    readonly property bool dark: App.theme !== "light"
+    readonly property string name: App.theme
+    readonly property bool darkUi: name !== "light"       // controls
+    readonly property bool lightScene: name !== "dark"    // 3D viewport
+    readonly property bool dark: darkUi                   // compatibility
 
-    // surfaces
-    readonly property color bg:          dark ? "#0f1114" : "#eef0f3"
-    readonly property color panel:       dark ? "#16191d" : "#f8f9fb"
-    readonly property color panelAlt:    dark ? "#1c2025" : "#ffffff"
-    readonly property color field:       dark ? "#0c0e11" : "#ffffff"
-    readonly property color border:      dark ? "#2a2f36" : "#d3d8df"
-    readonly property color borderStrong: dark ? "#3a414a" : "#b7bfc9"
-    readonly property color hover:       dark ? "#232830" : "#e6eaf0"
-    // text
-    readonly property color text:        dark ? "#e6e9ed" : "#1a1d21"
-    readonly property color textDim:     dark ? "#8b939d" : "#5d6672"
-    readonly property color textFaint:   dark ? "#59616b" : "#9aa2ac"
-    // accents
+    // ---------------------------------------------------------------- controls
+    readonly property color bg:          darkUi ? "#0f1114" : "#dcdfe3"
+    readonly property color panel:       darkUi ? "#16191d" : "#e4e7ea"
+    readonly property color panelAlt:    darkUi ? "#1c2025" : "#eceef0"
+    readonly property color field:       darkUi ? "#0c0e11" : "#f2f3f5"
+    readonly property color border:      darkUi ? "#2a2f36" : "#c3c8cf"
+    readonly property color borderStrong: darkUi ? "#3a414a" : "#a9b0b9"
+    readonly property color hover:       darkUi ? "#232830" : "#d4d8dd"
+    readonly property color text:        darkUi ? "#e6e9ed" : "#1d2024"
+    readonly property color textDim:     darkUi ? "#8b939d" : "#555d68"
+    readonly property color textFaint:   darkUi ? "#59616b" : "#8d949e"
     readonly property color accent:      "#ff9a2e"
     readonly property color accentText:  "#1a1208"
-    readonly property color info:        dark ? "#5ab4ff" : "#1f78c8"
-    readonly property color ok:          dark ? "#5fd08a" : "#1f9a52"
-    readonly property color warn:        "#f0c040"
-    readonly property color danger:      dark ? "#ff6b61" : "#c8372d"
-    // viewport
-    readonly property color viewportBg:  dark ? "#121417" : "#e9ecf0"
-    readonly property color grid:        dark ? "#6c7682" : "#8a95a3"
-    readonly property color edge:        dark ? Qt.rgba(0, 0, 0, 0.55) : Qt.rgba(0.1, 0.12, 0.15, 0.6)
-    readonly property var objectColors:  dark ? ["#aab2bc", "#8fb0d0", "#c9b48f", "#9cc0a4", "#c49ab8", "#b9a7d6"]
-                                               : ["#8a939e", "#6f93b8", "#b0976b", "#79a385", "#a87b9a", "#9785bd"]
-    // snapping marker colors by kind
+    readonly property color info:        darkUi ? "#5ab4ff" : "#1f6fb5"
+    readonly property color ok:          darkUi ? "#5fd08a" : "#1c8a4a"
+    readonly property color warn:        darkUi ? "#f0c040" : "#a87800"
+    readonly property color danger:      darkUi ? "#ff6b61" : "#c0352b"
+
+    // ---------------------------------------------------------------- scene
+    readonly property color viewportBg:  name === "dark" ? "#121417" : name === "studio" ? "#eceef1" : "#d9dde2"
+    readonly property color grid:        lightScene ? "#9aa1ab" : "#6c7682"
+    readonly property color edge:        lightScene ? Qt.rgba(0.10, 0.11, 0.13, 0.70) : Qt.rgba(0, 0, 0, 0.55)
+    readonly property color wire:        lightScene ? Qt.rgba(0.12, 0.13, 0.15, 0.38) : Qt.rgba(0.85, 0.88, 0.92, 0.30)
+    readonly property var objectColors:  name === "studio" ? ["#8c9199", "#7d838c", "#979ca4", "#868b93"]
+                                       : name === "dark" ? ["#aab2bc", "#8fb0d0", "#c9b48f", "#9cc0a4", "#c49ab8", "#b9a7d6"]
+                                                         : ["#8a939e", "#6f93b8", "#b0976b", "#79a385", "#a87b9a", "#9785bd"]
+    readonly property color sceneText:   lightScene ? "#4a515b" : "#8b939d"   // hints drawn over the viewport
+    readonly property color cubeFace:    lightScene ? "#f7f8f9" : "#1c2025"
+    readonly property color cubeLine:    lightScene ? "#9aa1ab" : "#3a414a"
+    readonly property color cubeText:    lightScene ? "#4a515b" : "#8b939d"
+
+    // snapping marker colors by kind (readable on light and dark scenes)
     function snapColor(kind) {
         switch (kind) {
-        case "point": return "#ffd23f"
-        case "mid": return "#5ad1ff"
-        case "center": return "#ff7ad9"
-        case "cross": return "#ff9a2e"
-        case "constraint": return "#9cff6b"
-        case "axis": return "#ff6b61"
-        case "grid": return "#9aa6b2"
-        default: return dark ? "#d0d6dc" : "#3b434c"
+        case "point": return lightScene ? "#c48a00" : "#ffd23f"
+        case "mid": return lightScene ? "#0a84c6" : "#5ad1ff"
+        case "center": return lightScene ? "#c2187a" : "#ff7ad9"
+        case "cross": return "#e07a10"
+        case "constraint": return lightScene ? "#3f9a12" : "#9cff6b"
+        case "axis": return "#d9443a"
+        case "grid": return lightScene ? "#5d6670" : "#9aa6b2"
+        default: return lightScene ? "#3b434c" : "#d0d6dc"
         }
     }
 
@@ -56,9 +68,9 @@ QtObject {
     readonly property int barHeight: 40
     readonly property int panelWidth: 340
 
-    // radial menu
+    // radial menu (drawn over the scene, styled like the controls)
     readonly property int radialInner: 34
     readonly property int radialOuter: 128
-    readonly property color radialFill: dark ? Qt.rgba(0.09, 0.10, 0.12, 0.94) : Qt.rgba(0.98, 0.98, 0.99, 0.96)
-    readonly property color radialDisabled: dark ? "#4a5059" : "#b0b6be"
+    readonly property color radialFill: darkUi ? Qt.rgba(0.09, 0.10, 0.12, 0.94) : Qt.rgba(0.93, 0.94, 0.95, 0.96)
+    readonly property color radialDisabled: darkUi ? "#4a5059" : "#9aa1aa"
 }

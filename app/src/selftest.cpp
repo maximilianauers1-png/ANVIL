@@ -125,13 +125,15 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     add("undo via button", [this] { clickItem("btnUndo"); }, [this] { return idle() && hasObject("Cylinder2"); });
     add("redo via button", [this] { clickItem("btnRedo"); }, [this] { return idle() && !hasObject("Cylinder2"); });
     // 10) live theme switch + unit display
-    add("light theme", [this] { clickItem("btnTheme"); }, [this] { return idle() && app_->theme() == "light"; });
+    add("light theme", [this] { clickItem("theme_light"); }, [this] { return idle() && app_->theme() == "light"; });
     add("unit inch", [this] { clickItem("unit_in"); }, [this] { return idle() && app_->unit() == "in"; });
     add("screenshot light", [this] { screenshot("06_light_inch"); });
-    add("dark theme + mm", [this] {
-        clickItem("btnTheme");
+    add("studio theme + mm + mesh view", [this] {
+        clickItem("theme_studio");
         clickItem("unit_mm");
-    }, [this] { return idle() && app_->theme() == "dark" && app_->unit() == "mm"; });
+        clickItem("btnMesh");
+    }, [this] { return idle() && app_->theme() == "studio" && app_->unit() == "mm" && app_->display() == "mesh"; });
+    add("screenshot studio mesh", [this] { screenshot("07_studio_mesh"); });
 
     connect(&timer_, &QTimer::timeout, this, &SelfTest::tick);
     timer_.start(50);

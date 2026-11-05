@@ -73,10 +73,28 @@ Rectangle {
             }
         }
         AButton {
-            objectName: "btnTheme"
-            text: Theme.dark ? "☾ Dark" : "☀ Light"
-            tip: "Switch theme"
-            onClicked: App.requestTheme(Theme.dark ? "light" : "dark")
+            objectName: "btnMesh"
+            text: "Mesh"
+            checkable: true
+            checked: App.display === "mesh"
+            tip: "Show every triangle edge (what the printer gets)"
+            onClicked: App.requestDisplay(App.display === "mesh" ? "shaded" : "mesh")
+        }
+        Rectangle { width: 1; height: 22; color: Theme.border }
+        Row {
+            spacing: 0
+            Repeater {
+                model: [["dark", "Dark"], ["studio", "Studio"], ["light", "Light"]]
+                delegate: AButton {
+                    objectName: "theme_" + modelData[0]
+                    text: modelData[1]
+                    checkable: true
+                    checked: Theme.name === modelData[0]
+                    leftPadding: 8
+                    rightPadding: 8
+                    onClicked: App.requestTheme(modelData[0])
+                }
+            }
         }
         AButton { text: "◎"; tip: "Customize the radial menu"; onClicked: bar.customizeRadial() }
     }

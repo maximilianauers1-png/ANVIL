@@ -1,8 +1,9 @@
 // Vulkan viewport renderer integrated into Qt Quick's render loop (ADR 0002/0007).
 //
 // Offscreen pass (MSAA color + reversed-Z depth, resolved) is recorded in
-// QQuickWindow::beforeRendering; a fullscreen composite draws it inside Qt's
-// render pass (beforeRenderPassRecording), so QML overlays render on top.
+// QQuickWindow::beforeRendering; the resolved VkImage is imported into the
+// scene graph as a texture (QSGVulkanTexture::fromNative) and drawn by Qt like
+// any item, so QML overlays render on top and Qt's render pass is never touched.
 // The render thread never copies mesh data: an uploader thread fills
 // host-visible buffers; the render thread only records GPU-side copies.
 #pragma once
@@ -35,6 +36,7 @@ struct MeshCpu {
     std::vector<float> pos;     // xyz, float, relative to origin
     std::vector<std::uint32_t> tris;
     std::vector<std::uint32_t> edges;  // feature edges, line list
+    std::vector<std::uint32_t> wire;   // every triangle edge once (mesh view), line list
 };
 
 struct DrawItem {
@@ -53,6 +55,8 @@ struct FrameInput {
     float bg[3] = {0.08f, 0.09f, 0.1f};
     float grid[3] = {0.5f, 0.55f, 0.6f};
     float edge[4] = {0.f, 0.f, 0.f, 0.55f};
+    float wire[4] = {0.f, 0.f, 0.f, 0.35f};
+    bool mesh_view = false;     // overlay every triangle edge
     float grid_opacity = 0.6f;
     double grid_step = 1.0;
     bool show_grid = true;
@@ -76,8 +80,10 @@ class ViewportRenderer {
     ~ViewportRenderer();
 
     void set_input(FrameInput in) { in_ = std::move(in); }  // render thread, during sync
-    void before_rendering();        // record offscreen pass (outside Qt's render pass)
-    void before_render_pass();      // composite into Qt's render pass
+    /// Sync phase (render thread): sizes the offscreen targets and returns the
+    /// image Qt samples as a texture (layout SHADER_READ_ONLY_OPTIMAL after the pass).
+    VkImage prepare(QSize px);
+    void before_rendering();        // record the offscreen pass (before Qt's render pass)
 
   private:
     struct GpuBuf {
@@ -89,8 +95,8 @@ class ViewportRenderer {
     struct GpuMesh {
         GpuBuf host, dev;           // dev is used if host is not device local
         bool copied = false;
-        VkDeviceSize pos_off = 0, tri_off = 0, edge_off = 0;
-        std::uint32_t tri_count = 0, edge_count = 0;
+        VkDeviceSize pos_off = 0, tri_off = 0, edge_off = 0, wire_off = 0;
+        std::uint32_t tri_count = 0, edge_count = 0, wire_count = 0;
         std::uint64_t last_used = 0;
     };
     struct Upload {
@@ -133,14 +139,9 @@ class ViewportRenderer {
     VkFramebuffer fb_ = VK_NULL_HANDLE;
     VkRenderPass rp_ = VK_NULL_HANDLE;
 
-    VkPipelineLayout mesh_layout_ = VK_NULL_HANDLE, grid_layout_ = VK_NULL_HANDLE, comp_layout_ = VK_NULL_HANDLE;
+    VkPipelineLayout mesh_layout_ = VK_NULL_HANDLE, grid_layout_ = VK_NULL_HANDLE;
     VkPipeline mesh_pipe_ = VK_NULL_HANDLE, ghost_pipe_ = VK_NULL_HANDLE, edge_pipe_ = VK_NULL_HANDLE,
-               grid_pipe_ = VK_NULL_HANDLE, comp_pipe_ = VK_NULL_HANDLE;
-    VkRenderPass comp_rp_ = VK_NULL_HANDLE;  // Qt's render pass the composite pipeline was built for
-    VkDescriptorSetLayout comp_dsl_ = VK_NULL_HANDLE;
-    VkDescriptorPool comp_pool_ = VK_NULL_HANDLE;
-    VkDescriptorSet comp_set_ = VK_NULL_HANDLE;
-    VkSampler sampler_ = VK_NULL_HANDLE;
+               grid_pipe_ = VK_NULL_HANDLE;
     VkQueryPool queries_ = VK_NULL_HANDLE;
     bool have_ts_ = false;
     bool drew_offscreen_ = false;
@@ -156,7 +157,6 @@ class ViewportRenderer {
         VkFramebuffer fb = VK_NULL_HANDLE;
     };
     std::vector<Dead> dead_;
-    std::vector<std::pair<std::uint64_t, VkDescriptorSet>> retired_sets_;
 
     // uploader thread
     std::thread uploader_;

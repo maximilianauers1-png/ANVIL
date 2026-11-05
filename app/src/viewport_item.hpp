@@ -25,6 +25,8 @@ class ViewportItem : public QQuickItem {
     Q_PROPERTY(QColor edgeColor MEMBER edge_ NOTIFY styleChanged)
     Q_PROPERTY(QVariantList objectColors MEMBER object_colors_ NOTIFY styleChanged)
     Q_PROPERTY(bool showGrid MEMBER show_grid_ NOTIFY styleChanged)
+    Q_PROPERTY(QColor wireColor MEMBER wire_ NOTIFY styleChanged)
+    Q_PROPERTY(bool meshView MEMBER mesh_view_ NOTIFY styleChanged)
     Q_PROPERTY(QStringList selection READ selection WRITE setSelection NOTIFY selectionChanged)
     // snapping (read by the QML overlay)
     Q_PROPERTY(bool snapVisible READ snapVisible NOTIFY snapChanged)
@@ -142,6 +144,7 @@ class ViewportItem : public QQuickItem {
     void wheelEvent(QWheelEvent* e) override;
     void geometryChange(const QRectF& n, const QRectF& o) override;
     void releaseResources() override;
+    QSGNode* updatePaintNode(QSGNode* old, UpdatePaintNodeData*) override;
 
   private slots:
     void handleWindowChanged(QQuickWindow* w);
@@ -157,6 +160,7 @@ class ViewportItem : public QQuickItem {
 
     std::shared_ptr<RendererStats> stats_ = std::make_shared<RendererStats>();
     ViewportRenderer* renderer_ = nullptr;  // render thread
+    VkImage shown_image_ = VK_NULL_HANDLE;  // image currently wrapped by the texture node (render thread)
     std::shared_ptr<const Scene> scene_;
     std::shared_ptr<const MeshCpu> ghost_;
     Camera cam_;
@@ -167,6 +171,8 @@ class ViewportItem : public QQuickItem {
     QColor bg_{20, 22, 26}, grid_{120, 130, 140}, edge_{0, 0, 0, 140};
     QVariantList object_colors_;
     bool show_grid_ = true;
+    QColor wire_{0, 0, 0, 90};
+    bool mesh_view_ = false;
 
     // interaction
     QPointF press_pos_, last_pos_, hover_pos_;

@@ -49,15 +49,15 @@ Item {
                 p = P(1, 1); ctx.lineTo(p.x, p.y)
                 p = P(-1, 1); ctx.lineTo(p.x, p.y)
                 ctx.closePath()
-                ctx.fillStyle = hot ? Theme.accent : Theme.panelAlt
+                ctx.fillStyle = hot ? Theme.accent : Theme.cubeFace
                 ctx.globalAlpha = 0.92
                 ctx.fill()
                 ctx.globalAlpha = 1
-                ctx.strokeStyle = Theme.borderStrong
+                ctx.strokeStyle = Theme.cubeLine
                 ctx.lineWidth = 1
                 ctx.stroke()
                 // 3x3 regions (edges/corners are clickable directions)
-                ctx.strokeStyle = Theme.border
+                ctx.strokeStyle = Theme.cubeLine
                 for (const s of [-0.6, 0.6]) {
                     let q0 = P(s, -1), q1 = P(s, 1)
                     ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke()
@@ -66,7 +66,7 @@ Item {
                 }
                 if (-d > 0.35) {
                     const c = P(0, 0)
-                    ctx.fillStyle = hot ? Theme.accentText : Theme.textDim
+                    ctx.fillStyle = hot ? Theme.accentText : Theme.cubeText
                     ctx.font = "bold 10px sans-serif"
                     ctx.textAlign = "center"
                     ctx.textBaseline = "middle"
@@ -80,7 +80,7 @@ Item {
         }
         Connections {
             target: Theme
-            function onDarkChanged() { canvas.requestPaint() }
+            function onNameChanged() { canvas.requestPaint() }
         }
     }
     MouseArea {
@@ -97,8 +97,17 @@ Item {
             if (d.x !== 0 || d.y !== 0 || d.z !== 0) App.requestViewDirection(d)
         }
     }
+    Rectangle {  // control chip: styled like the panels so it reads on any scene color
+        anchors.fill: viewRow
+        anchors.margins: -3
+        radius: Theme.radius
+        color: Theme.panel
+        border.color: Theme.border
+    }
     Row {
+        id: viewRow
         anchors.top: parent.bottom
+        anchors.topMargin: 4
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: 4
         AButton { text: "Iso"; implicitHeight: 22; onClicked: App.requestView("iso") }

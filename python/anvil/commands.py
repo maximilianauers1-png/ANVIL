@@ -203,6 +203,11 @@ for _name, _label in (("top", "Top view"), ("bottom", "Bottom view"), ("front", 
                          build=(lambda n: (lambda ctx: f"view({n!r})"))(_name), keywords="camera"))
 
 
+for _mode, _label in (("shaded", "Shaded view"), ("mesh", "Mesh view")):
+    registry.add(Command(id=f"display.{_mode}", label=_label, category="View",
+                         help=f"Viewport: {_label.lower()}", keywords="wireframe triangles display",
+                         build=(lambda m: (lambda ctx: f"display({m!r})"))(_mode)))
+
 # Radial layout: slot index = sector (0 = east, counter-clockwise in 45 degree steps).
 # Positions are stable across contexts: inapplicable commands are greyed out,
 # never removed or reordered (muscle memory).

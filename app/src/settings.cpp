@@ -30,6 +30,7 @@ Settings Settings::load() {
     if (v > kSettingsFormat) return s;  // written by a newer ANVIL: keep defaults, do not overwrite blindly
     s.theme = o.value("theme").toString(s.theme);
     s.unit = o.value("unit").toString(s.unit);
+    s.display = o.value("display").toString(s.display);
     s.radial_key = o.value("radial_key").toString(s.radial_key);
     s.chord_mm = o.value("chord_mm").toDouble(s.chord_mm);
     if (s.chord_mm < tol::kMinChordMm) s.chord_mm = tol::kDefaultChordMm;
@@ -45,6 +46,7 @@ void Settings::save() const {
     o["version"] = kSettingsFormat;
     o["theme"] = theme;
     o["unit"] = unit;
+    o["display"] = display;
     o["radial_key"] = radial_key;
     o["chord_mm"] = chord_mm;
     o["autosave_seconds"] = autosave_seconds;
