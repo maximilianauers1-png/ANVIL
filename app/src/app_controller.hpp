@@ -106,7 +106,9 @@ class AppController : public QObject {
     Q_INVOKABLE void setVariable(const QString& name, const QString& text);
     Q_INVOKABLE QString formatLength(double mm) const;
     Q_INVOKABLE QString formatPoint(const QVector3D& p) const;
-    Q_INVOKABLE QString validateField(const QString& text) const;  // "" or an error message
+    Q_INVOKABLE QString validateField(const QString& text, const QString& dim = "Length") const;  // "" or an error
+    /// Live ghost of an object with one parameter changed (no document change).
+    Q_INVOKABLE void previewParam(const QString& name, const QString& path, const QString& key, const QString& text);
     Q_INVOKABLE void toggleVisible(const QString& name);
     Q_INVOKABLE void renameObject(const QString& from, const QString& to);
     Q_INVOKABLE void pick(const QString& name, bool additive);
@@ -179,6 +181,7 @@ class AppController : public QObject {
 
   private:
     QString uniqueName(const QString& base) const;
+    Dim paramDim(const QString& name, const QString& path, const QString& key) const;
     void onSketchDrawn(const QString& kind, const QString& plane, double offset, const QVariantList& pts, bool closed,
                        const QString& on);
     void onToolsPicked(const QString& target, const QStringList& tools);

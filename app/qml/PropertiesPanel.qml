@@ -167,22 +167,75 @@ Rectangle {
                             Layout.fillWidth: true
                             spacing: 6
                             ALabel {
+                                id: keyLabel
                                 text: modelData.key
-                                dim: true
+                                dim: !keyMouse.containsMouse && !keyMouse.pressed
+                                color: keyMouse.pressed ? Theme.accent : dim ? Theme.textDim : Theme.text
                                 Layout.preferredWidth: 96
-                                ToolTip.visible: keyMouse.containsMouse
-                                ToolTip.text: modelData.help
-                                MouseArea { id: keyMouse; anchors.fill: parent; hoverEnabled: true }
+                                ToolTip.visible: keyMouse.containsMouse && !keyMouse.pressed
+                                ToolTip.text: modelData.help + (modelData.expr === "" ? "  (drag left/right to change)" : "")
+                                // Scrubbing: drag the name horizontally; the part follows as a
+                                // ghost, releasing commits one edit (one undo step).
+                                MouseArea {
+                                    id: keyMouse
+                                    objectName: "scrub_" + nodeBox.row.path.replace(/\//g, "_") + "_" + modelData.key
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    preventStealing: true  // the panel's Flickable must not take the drag
+                                    enabled: modelData.expr === "" && modelData.number !== undefined
+                                    cursorShape: enabled ? Qt.SizeHorCursor : Qt.ArrowCursor
+                                    property real x0: 0
+                                    property real v0: 0
+                                    property string pending: ""
+                                    function valueAt(dx, fine) {
+                                        var k = fine ? 0.1 : 1
+                                        var v
+                                        if (modelData.dim === "Angle") v = Math.round(v0 + dx * 0.5 * k)          // 0.5 deg/px
+                                        else if (modelData.dim === "None") v = Math.round((v0 + dx * 0.005 * k) * 1000) / 1000
+                                        else {
+                                            // logarithmic for lengths: ~1 %/px, rounded to 3 significant digits
+                                            v = v0 * Math.exp(dx * 0.01 * k)
+                                            if (v0 === 0) v = dx * 0.05 * k
+                                            var p = Math.pow(10, Math.floor(Math.log10(Math.max(Math.abs(v), 1e-9))) - 2)
+                                            v = Math.round(v / p) * p
+                                        }
+                                        return v
+                                    }
+                                    function fmt(v) {
+                                        var t = Number(v.toPrecision(6)).toString()
+                                        return modelData.dim === "Angle" ? t + " deg" : modelData.dim === "Length" ? t + " " + App.unit : t
+                                    }
+                                    onPressed: (m) => { x0 = m.x; v0 = modelData.number; pending = "" }
+                                    onPositionChanged: (m) => {
+                                        if (!pressed) return
+                                        pending = fmt(valueAt(m.x - x0, m.modifiers & Qt.ShiftModifier))
+                                        paramField.text = pending
+                                        previewTimer.restart()
+                                    }
+                                    onReleased: {
+                                        previewTimer.stop()
+                                        App.clearPreview()
+                                        if (pending !== "" && pending !== modelData.text)
+                                            App.setParam(panel.single, nodeBox.row.path, modelData.key, pending)
+                                    }
+                                    onCanceled: { previewTimer.stop(); App.clearPreview(); paramField.text = modelData.text }
+                                    Timer {  // coalesce previews: at most one per 50 ms
+                                        id: previewTimer
+                                        interval: 50
+                                        onTriggered: App.previewParam(panel.single, nodeBox.row.path, modelData.key, keyMouse.pending)
+                                    }
+                                }
                             }
                             AField {
+                                id: paramField
                                 objectName: "param_" + nodeBox.row.path.replace(/\//g, "_") + "_" + modelData.key
                                 Layout.fillWidth: true
                                 text: modelData.text
                                 placeholderText: modelData.key === "d2" ? "= d" : ""
                                 font.family: modelData.expr !== "" ? Theme.mono : Theme.font
-                                invalid: text !== "" && App.validateField(modelData.dim === "Angle" ? "0 mm" : text) !== "" && modelData.dim !== "Angle"
+                                invalid: text !== "" && App.validateField(text, modelData.dim) !== ""
                                 ToolTip.visible: activeFocus && invalid
-                                ToolTip.text: App.validateField(text)
+                                ToolTip.text: App.validateField(text, modelData.dim)
                                 onAccepted: {
                                     if (text !== modelData.text)
                                         App.setParam(panel.single, nodeBox.row.path, modelData.key, text)

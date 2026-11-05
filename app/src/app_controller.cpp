@@ -712,7 +712,7 @@ QVariantList AppController::nodeTree(const QString& name) const {
             QVariantMap p;
             p["key"] = QString(spec.name);
             p["help"] = QString(spec.help);
-            p["dim"] = spec.dim == dims::kAngle ? "Angle" : "Length";
+            p["dim"] = spec.dim == dims::kAngle ? "Angle" : spec.dim == dims::kLength ? "Length" : "None";
             if (it == n->params.end()) {
                 p["text"] = "";
                 p["expr"] = "";
@@ -727,9 +727,15 @@ QVariantList AppController::nodeTree(const QString& name) const {
                 p["expr"] = QString::fromStdString(it->second.expr);
                 p["text"] = !it->second.expr.empty() ? QString::fromStdString(it->second.expr)
                             : spec.dim == dims::kAngle   ? QString::number(v * 180 / std::numbers::pi, 'g', 10) + " deg"
-                                                         : formatLength(v);
+                            : spec.dim == dims::kLength  ? formatLength(v)
+                                                         : QString::number(v, 'g', 10);
                 p["value"] = spec.dim == dims::kAngle ? QString::number(v * 180 / std::numbers::pi, 'g', 8) + " deg"
-                                                      : formatLength(v);
+                             : spec.dim == dims::kLength ? formatLength(v)
+                                                         : QString::number(v, 'g', 8);
+                // numeric value in the field's unit (mm in the display unit, deg, or plain) for scrubbing
+                p["number"] = spec.dim == dims::kAngle    ? v * 180 / std::numbers::pi
+                              : spec.dim == dims::kLength ? v / unit_info(unit_).mm_per_unit
+                                                          : v;
             }
             params << p;
         }
@@ -754,9 +760,17 @@ QString AppController::paramLiteral(const QString& text, Dim dim, QString* error
         RtQuantity q = eval_expr(t);
         if (q.dim.dimensionless()) {  // bare number: the display unit applies
             if (dim == dims::kLength) return reprDouble(q.value * unit_info(unit_).mm_per_unit) + "*mm";
-            return reprDouble(q.value) + "*deg";
+            if (dim == dims::kAngle) return reprDouble(q.value) + "*deg";
+            return reprDouble(q.value);  // factors, counts
         }
         if (!(q.dim == dim)) throw ExprError("expected " + dim_name(dim) + ", got " + dim_name(q.dim), 0);
+        // "<number> <unit>" stays readable in the generated command (30*deg, 1.5*inch)
+        static const QRegularExpression simple(R"(^\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*\*?\s*(mm|cm|m|um|in|inch|deg|rad)\s*$)");
+        auto m = simple.match(text);
+        if (m.hasMatch()) {
+            QString u = m.captured(2) == "in" ? "inch" : m.captured(2);
+            return reprDouble(m.captured(1).toDouble()) + "*" + u;
+        }
         if (dim == dims::kLength) return reprDouble(q.value) + "*mm";
         return reprDouble(q.value) + "*rad";
     } catch (const std::exception& e) {
@@ -765,14 +779,37 @@ QString AppController::paramLiteral(const QString& text, Dim dim, QString* error
     }
 }
 
-QString AppController::validateField(const QString& text) const {
+QString AppController::validateField(const QString& text, const QString& dim) const {
     QString err;
-    paramLiteral(text, dims::kLength, &err);
+    paramLiteral(text, dim == "Angle" ? dims::kAngle : dim == "None" ? Dim{} : dims::kLength, &err);
     return err;
 }
 
+Dim AppController::paramDim(const QString& name, const QString& path, const QString& key) const {
+    const Object* o = session_->document().state()->find(name.toStdString());
+    if (!o || !o->root) return dims::kLength;
+    NodePtr n = o->root;
+    try {
+        for (const auto& part : path.split('/', Qt::SkipEmptyParts)) {
+            n = n->child(part.toStdString());
+            if (!n) return dims::kLength;
+        }
+    } catch (const std::exception&) {
+        return dims::kLength;
+    }
+    for (const auto& spec : param_specs(n->kind))
+        if (key == spec.name) return spec.dim;
+    return dims::kLength;
+}
+
+void AppController::previewParam(const QString& name, const QString& path, const QString& key, const QString& text) {
+    QString lit = paramLiteral(text, paramDim(name, path, key), nullptr);
+    if (lit.isEmpty()) return;
+    preview("edit_preview(" + pyStr(name) + ", " + pyStr(path) + ", " + key + "=" + lit + ")");
+}
+
 void AppController::setParam(const QString& name, const QString& path, const QString& key, const QString& text) {
-    Dim dim = (key == "rx" || key == "ry" || key == "rz") ? dims::kAngle : dims::kLength;
+    Dim dim = paramDim(name, path, key);
     QString err;
     QString lit = paramLiteral(text, dim, &err);
     if (lit.isEmpty()) {

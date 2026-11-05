@@ -200,6 +200,25 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     add("iso view for the result", [this] { app_->requestView("iso"); }, [this] { return idle(); });
     add("screenshot mask cut", [this] { screenshot("09_mask_cut"); });
 
+    // 13) deform from the radial (selection ring, sector 3), scrub 'twist' in the panel
+    add("radial NW = Deform", [this] {
+        app_->setSelection({"Cylinder1"});
+        flick(view_->mapToScene(QPointF(140, 180)), 135, 70);
+    }, [this] { return idle() && item("scrub__twist") != nullptr; });
+    add("scrub twist +60 px = 30 deg", [this] {
+        QQuickItem* it = item("scrub__twist");
+        QPointF c = center(it);
+        mouseMove(c);
+        mousePress(c, Qt::LeftButton);
+        mouseMove(c + QPointF(30, 0), Qt::LeftButton);
+        mouseMove(c + QPointF(60, 0), Qt::LeftButton);
+        mouseRelease(c + QPointF(60, 0), Qt::LeftButton);
+    }, [this] {
+        auto h = app_->history();
+        return idle() && !h.isEmpty() && h.back().toMap()["source"].toString().contains("twist=30*deg");
+    });
+    add("screenshot deform", [this] { screenshot("10_deform"); });
+
     connect(&timer_, &QTimer::timeout, this, &SelfTest::tick);
     timer_.start(50);
     step_clock_.start();
