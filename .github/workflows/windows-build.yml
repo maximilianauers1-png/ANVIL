@@ -1,0 +1,49 @@
+# Compile + test check on Windows/MSVC (no GPU in CI: the GUI test is skipped).
+# Manual trigger only, so it never runs on its own. Only source code is
+# involved; ANVIL itself never talks to any service. Remove this file to stop
+# using GitHub Actions entirely; scripts/build-windows.ps1 does the same locally.
+name: windows-build
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          arch: win64_msvc2022_64
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Configure
+        run: cmake --preset windows-release -DPython3_EXECUTABLE="$env:pythonLocation\python.exe"
+      - name: Build
+        run: cmake --build --preset windows-release
+      - name: Test (without GUI)
+        run: ctest --preset windows-release -LE gui
+      - name: Package
+        shell: pwsh
+        run: |
+          $env:QT_ROOT_DIR = "$env:QT_ROOT_DIR"
+          ./scripts/build-windows.ps1 -SkipTests
+      - name: Smoke test packaged CLI (isolated Python, no sockets)
+        shell: pwsh
+        run: |
+          cd dist/ANVIL
+          ./anvil-cli.exe --version
+          ./anvil-cli.exe ../../examples/magnet_base.py
+          ./anvil-cli.exe -c "import socket" ; if ($LASTEXITCODE -eq 0) { throw "socket must not be importable" } else { $global:LASTEXITCODE = 0 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ANVIL-windows-x64
+          path: dist/ANVIL
+          retention-days: 7

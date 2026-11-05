@@ -1,6 +1,7 @@
 #include "paths.hpp"
 
 #include <cstdlib>
+#include <iterator>
 
 #ifdef _WIN32
 #include <windows.h>

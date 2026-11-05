@@ -5,6 +5,7 @@
 //   anvil --bench N --bench-out report.json [--bench-scene scene.stl]
 //                                 orbit benchmark (G1), then quit
 //   anvil --selftest OUTDIR       drive the real UI through the M1 acceptance (E2E)
+//   anvil --measure-startup F     write the cold-start time (ms) to F and quit (gate G3)
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -80,6 +81,7 @@ int main(int argc, char** argv) {
     };
     const int bench_frames = arg("--bench").toInt();
     const QString bench_out = arg("--bench-out"), bench_scene = arg("--bench-scene"), selftest_dir = arg("--selftest");
+    const QString startup_out = arg("--measure-startup");  // write cold-start ms to this file, then quit
 
     // Vulkan is required (ADR 0002); fail with a clear message instead of a black window.
     {
@@ -130,6 +132,11 @@ int main(int argc, char** argv) {
         ctrl->setStartupMs(ms);
         std::printf("startup_ms %.1f\n", ms);
         std::fflush(stdout);
+        if (!startup_out.isEmpty()) {
+            QFile f(startup_out);
+            if (f.open(QIODevice::WriteOnly)) f.write(QByteArray::number(ms, 'f', 1));
+            QTimer::singleShot(0, &app, &QCoreApplication::quit);
+        }
     }, Qt::QueuedConnection);
 
     for (int i = 1; i < args.size(); ++i) {

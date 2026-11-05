@@ -51,22 +51,23 @@ if(ANVIL_BUILD_TESTS)
   endif()
 endif()
 
-# --- Qt + Vulkan headers (app only) ------------------------------------------
+# --- Vulkan headers + Qt (app only) ------------------------------------------
+# Headers only: the Vulkan loader ships with the GPU driver (vulkan-1.dll), so
+# no Vulkan SDK is needed. Resolved before Qt so Qt's Vulkan support finds them.
 if(ANVIL_BUILD_APP)
-  find_package(Qt6 ${ANVIL_QT_MIN} REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
   find_package(Vulkan QUIET)
+  add_library(anvil_vulkan_headers INTERFACE)
   if(Vulkan_FOUND)
-    add_library(anvil_vulkan_headers INTERFACE)
     target_include_directories(anvil_vulkan_headers SYSTEM INTERFACE ${Vulkan_INCLUDE_DIRS})
   else()
-    # Headers only: the Vulkan loader ships with the GPU driver (vulkan-1.dll).
     FetchContent_Declare(VulkanHeaders
       GIT_REPOSITORY https://github.com/KhronosGroup/Vulkan-Headers.git
       GIT_TAG ${ANVIL_VKHEADERS_TAG}
       GIT_SHALLOW TRUE
       SYSTEM)
     FetchContent_MakeAvailable(VulkanHeaders)
-    add_library(anvil_vulkan_headers INTERFACE)
-    target_link_libraries(anvil_vulkan_headers INTERFACE Vulkan::Headers)
+    set(Vulkan_INCLUDE_DIR "${vulkanheaders_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+    target_include_directories(anvil_vulkan_headers SYSTEM INTERFACE "${vulkanheaders_SOURCE_DIR}/include")
   endif()
+  find_package(Qt6 ${ANVIL_QT_MIN} REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
 endif()
