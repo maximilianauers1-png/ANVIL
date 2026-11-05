@@ -25,6 +25,25 @@ if(NOT manifold_FOUND)
   FetchContent_MakeAvailable(manifold)
 endif()
 
+# --- Eigen (dense linear algebra for the sketch solver) ------------------------
+find_package(Eigen3 3.4 CONFIG QUIET)
+if(NOT TARGET Eigen3::Eigen)
+  FetchContent_Declare(Eigen3
+    GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+    GIT_TAG ${ANVIL_EIGEN_TAG}
+    GIT_SHALLOW TRUE
+    SYSTEM)
+  set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
+  set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  set(BUILD_TESTING OFF)
+  FetchContent_GetProperties(Eigen3)
+  if(NOT eigen3_POPULATED)
+    FetchContent_Populate(Eigen3)
+  endif()
+  add_library(Eigen3::Eigen INTERFACE IMPORTED GLOBAL)
+  target_include_directories(Eigen3::Eigen SYSTEM INTERFACE ${eigen3_SOURCE_DIR})
+endif()
+
 # --- Python (embedded) + pybind11 --------------------------------------------
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter Development.Embed)
 find_package(pybind11 3.0 CONFIG QUIET)

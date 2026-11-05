@@ -1,4 +1,4 @@
-add_executable(anvil_core_tests unit/test_core.cpp)
+add_executable(anvil_core_tests unit/test_core.cpp unit/test_sketch.cpp)
 target_link_libraries(anvil_core_tests PRIVATE anvil_core Catch2::Catch2WithMain)
 anvil_warnings(anvil_core_tests)
 include(Catch)
