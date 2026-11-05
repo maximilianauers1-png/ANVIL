@@ -209,7 +209,17 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         })
         .def("children", [](const NodeHandle& n) { return n.node->child_names(); })
         .def("child", [](const NodeHandle& n, const std::string& path) { return NodeHandle{node_at(n.node, path)}; })
-        .def("same", [](const NodeHandle& a, const NodeHandle& b) { return a.node == b.node; });
+        .def("same", [](const NodeHandle& a, const NodeHandle& b) { return a.node == b.node; })
+        .def("sculpt_info", [](const NodeHandle& n) {
+            if (n.node->kind != NodeKind::Sculpt) throw std::invalid_argument("not a sculpt node");
+            py::list strokes;
+            for (const auto& s : n.node->sculpt->strokes) {
+                py::list path;
+                for (const auto& p : s.path) path.append(py::make_tuple(p.x, p.y, p.z));
+                strokes.append(py::make_tuple(std::string(sdf::brush_name(s.brush)), s.radius, s.strength, path));
+            }
+            return py::make_tuple(n.node->sculpt->voxel, strokes);
+        });
 
     m.def("make_primitive", [](const std::string& kind, const ParamDict& p) {
         return NodeHandle{make_primitive(kind_from(kind), to_params(p))};
@@ -241,6 +251,29 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         return NodeHandle{make_feature(feature_kind(kind), inputs, to_params(p), attrs)};
     });
     m.def("make_ref", [](const std::string& name) { return NodeHandle{make_ref(name)}; });
+    // --- M3: sculpting -------------------------------------------------------------
+    // strokes: [(brush, radius_mm, strength, [(x, y, z), ...]), ...]
+    m.def("make_sculpt", [](const NodeHandle& src, double voxel, const py::list& strokes) {
+        std::vector<sdf::Stroke> out;
+        for (const auto& it : strokes) {
+            auto t = it.cast<py::tuple>();
+            if (t.size() != 4) throw std::invalid_argument("stroke: (brush, radius, strength, path)");
+            sdf::Stroke s;
+            if (!sdf::parse_brush(t[0].cast<std::string>(), s.brush))
+                throw std::invalid_argument("unknown brush '" + t[0].cast<std::string>() +
+                                            "' (draw, carve, smooth, grab, flatten)");
+            s.radius = t[1].cast<double>();
+            s.strength = t[2].cast<double>();
+            for (const auto& p : t[3].cast<py::list>()) {
+                auto q = p.cast<py::tuple>();
+                s.path.push_back({q[0].cast<double>(), q[1].cast<double>(), q[2].cast<double>()});
+            }
+            out.push_back(std::move(s));
+        }
+        return NodeHandle{make_sculpt(src.node, voxel, std::move(out))};
+    });
+    m.attr("DEFAULT_VOXEL_MM") = tol::kDefaultVoxelMm;
+    m.attr("MIN_VOXEL_MM") = tol::kMinVoxelMm;
     m.def("export_step", [](const NodeHandle& n, const std::string& path) {
         if (S().replaying()) return;
         auto st = S().document().current();
@@ -311,20 +344,21 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         d["volume"] = s->mesh->signed_volume();
         d["area"] = s->mesh->area();
         d["bbox"] = py::make_tuple(py::make_tuple(b.lo.x, b.lo.y, b.lo.z), py::make_tuple(b.hi.x, b.hi.y, b.hi.z));
-        d["manifold"] = bool(s->solid);
+        d["manifold"] = bool(s->solid) || (s->grid && !s->mesh->F.empty());  // DC output: closed by construction, export re-validates
         d["error"] = s->error;
         return d;
     });
     m.def("check", [](const NodeHandle& n, double chord) {
         auto s = eval_node(n, chord);
-        return report_dict(validate(s->mesh->rounded_to_float()));
+        Mesh w = export_mesh(*s);
+        return report_dict(validate(w, {.abs_tol_mm = float_tolerance(w)}));
     });
     m.def("export_stl", [](const NodeHandle& n, const std::string& path, const std::string& unit, double chord,
                            bool ascii) {
         auto s = eval_node(n, chord);
         // Validate exactly what will be written: float32 positions (STL stores float).
-        Mesh written = s->mesh->rounded_to_float();
-        ValidationReport rep = validate(written);
+        Mesh written = export_mesh(*s);
+        ValidationReport rep = validate(written, {.abs_tol_mm = float_tolerance(written)});
         py::dict d = report_dict(rep);
         d["path"] = path;
         d["unit"] = unit;

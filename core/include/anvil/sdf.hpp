@@ -97,13 +97,30 @@ Grid from_function(const std::function<double(const Vec3&)>& f, const Box3& boun
 /// the closest feature (Baerentzen & Aanaes 2005, IEEE TVCG 11(3)).
 Grid from_mesh(const Mesh& m, double h);
 
-/// Dual Contouring (Ju et al. 2002) of the cells owned by one chunk (chunk
-/// coordinates in units of kChunkBricks bricks). Cell vertices minimise the
-/// QEF sum (n_i . (x - p_i))^2 via a truncated eigen-decomposition
-/// (sigma_i < 0.1 sigma_1 dropped) around the mass point, clamped to the cell.
+/// Dual contouring (Ju et al. 2002 topology: one quad per sign-changing
+/// lattice edge) of the cells owned by one chunk (chunk coordinates in units
+/// of kChunkBricks bricks). Cell vertices sit at the mass point of the cell's
+/// edge crossings (Surface Nets placement): measured fold-free where the QEF
+/// minimiser self-intersected (ADR 0017).
 Mesh dual_contour_chunk(const Grid& g, const IVec3& chunk);
 /// Whole surface, welded (one vertex per cell): closed and exportable.
 Mesh dual_contour(const Grid& g);
+
+/// Chunk mesh plus the lattice cell of every vertex (for welding).
+struct ChunkMesh {
+    std::uint64_t key = 0;   // Grid::chunk_key at creation
+    IVec3 chunk;
+    Mesh mesh;
+    std::vector<std::uint64_t> cell;  // packed cell coordinate per vertex
+};
+/// Cached by chunk key (process-wide LRU): unchanged chunks are not re-meshed.
+std::shared_ptr<const ChunkMesh> chunk_mesh(const Grid& g, const IVec3& chunk);
+/// All chunk meshes of the grid (parallel for the uncached ones).
+std::vector<std::shared_ptr<const ChunkMesh>> chunk_meshes(const Grid& g);
+/// Welds chunk meshes into one closed mesh: vertices of the same cell merge
+/// (they are bit-identical by construction). Radix sort of the packed cell
+/// keys, O(V).
+Mesh weld(const std::vector<std::shared_ptr<const ChunkMesh>>& parts);
 /// Chunks containing at least one allocated brick.
 std::vector<IVec3> chunks_of(const Grid& g);
 inline IVec3 chunk_of_brick(const IVec3& b) {
@@ -125,6 +142,32 @@ struct Stroke {
     std::vector<Vec3> path;
     double radius = 2.0;
     double strength = 0.5;
+};
+
+/// Incremental stroke application: points arrive one by one (live sculpting)
+/// and every complete dab is applied immediately. Feeding the same points
+/// gives bit-identical grids to apply_stroke (replay of the Python command).
+class StrokeApplier {
+  public:
+    StrokeApplier(Grid& g, Brush brush, double radius, double strength);
+    void add(const Vec3& p);
+    void finish();
+    /// Bricks changed since the last call.
+    std::vector<IVec3> take_touched();
+    std::size_t dabs() const { return dabs_; }
+
+  private:
+    void dab(const Vec3& c, const Vec3& grab);
+    Grid& g_;
+    Brush brush_;
+    double R_, st_, spacing_;
+    bool have_first_ = false, finished_ = false;
+    Vec3 last_point_, last_dab_;
+    double carry_ = 0;
+    Vec3 plane_n_;
+    double plane_d_ = 0;
+    std::size_t dabs_ = 0;
+    std::unordered_set<IVec3, IVec3Hash> touched_, all_touched_;
 };
 
 /// Applies the stroke; returns the bricks it changed (for remeshing).

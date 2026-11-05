@@ -11,6 +11,7 @@
 
 #include "anvil/expr.hpp"
 #include "anvil/mesh.hpp"
+#include "anvil/sdf.hpp"
 #include "anvil/units.hpp"
 
 namespace manifold { class Manifold; }
@@ -46,6 +47,8 @@ enum class NodeKind {
     Ref,           // attr "name": the current root of another object (parametric link)
     Solidify,      // in: sketch; thickens every chain to a wall (mesh kernel, Clipper2)
     Deform,        // in: solid; stretch / taper / twist / bend (mesh kernel)
+    // M3
+    Sculpt,        // in: solid; voxel size + sculpt strokes on its SDF (sparse bricks)
 };
 enum class BoolOp { Union, Difference, Intersection };
 
@@ -66,6 +69,12 @@ struct Node;
 using NodePtr = std::shared_ptr<const Node>;
 struct Sketch;
 
+/// Sculpt node payload: the voxel size and the strokes, in order.
+struct SculptData {
+    double voxel = 0.05;                 // mm
+    std::vector<sdf::Stroke> strokes;
+};
+
 /// Kinds that need the exact B-Rep kernel (OpenCASCADE, in the anvil-geom worker).
 bool is_brep_kind(NodeKind k);
 
@@ -82,6 +91,7 @@ struct Node {
     // M2
     std::map<std::string, std::string> attrs;  // non-numeric attributes (edge selector, ref name, ...)
     std::shared_ptr<const Sketch> sketch;      // Sketch nodes
+    std::shared_ptr<const SculptData> sculpt;  // Sculpt nodes
 
     /// Child by path element: "a"/"b" (Boolean), "src" (Transform, features), "0".."n" (Loft/Sweep).
     NodePtr child(const std::string& elem) const;
@@ -98,6 +108,7 @@ NodePtr make_sketch(std::shared_ptr<const Sketch> s);
 NodePtr make_feature(NodeKind k, std::vector<NodePtr> inputs, std::map<std::string, Param> params,
                      std::map<std::string, std::string> attrs);
 NodePtr make_ref(const std::string& object_name);
+NodePtr make_sculpt(NodePtr src, double voxel_mm, std::vector<sdf::Stroke> strokes);
 /// Allowed attribute names per kind.
 const std::vector<std::string>& attr_names(NodeKind k);
 
@@ -132,6 +143,10 @@ struct Shape {
     std::shared_ptr<const Mesh> lines;                // sketches: line list (pairs of vertices)
     std::string error;                                // why `solid` is null
     bool brep = false;                                // evaluated by the exact B-Rep kernel
+    // Sculpt: the field and its chunk meshes (the viewport uploads chunks;
+    // `mesh` is their welded union). `solid` is built on demand (booleans).
+    std::shared_ptr<const sdf::Grid> grid;
+    std::vector<std::shared_ptr<const sdf::ChunkMesh>> chunks;
 };
 
 /// Object name -> current root node (for Ref nodes); empty if unknown.
@@ -177,6 +192,11 @@ int circle_segments(double radius_mm, double chord_mm);
 
 std::shared_ptr<const Shape> evaluate(const NodePtr& n, const VariableResolver& vars, const EvalSettings& s,
                                       ShapeCache* cache = nullptr);
+
+/// The mesh an STL export writes (float32 positions). Validate it with
+/// abs_tol_mm = float_tolerance(): sub-ulp slivers of boolean results only
+/// touch, and rounding must not make them read as crossings.
+Mesh export_mesh(const Shape& s);
 AnalyticFeatures analytic_features(const NodePtr& n, const VariableResolver& vars);
 
 }  // namespace anvil

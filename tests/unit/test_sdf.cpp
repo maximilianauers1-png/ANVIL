@@ -65,7 +65,10 @@ TEST_CASE("mesh -> SDF -> DC keeps sharp box edges (QEF)", "[sdf]") {
                                   Box3{c - half, c + half}, 0.1);
     Mesh dc = dual_contour(analytic);
     CHECK(validate(dc, {.self_intersections = false}).ok);
-    CHECK(dc.signed_volume() == Catch::Approx(72.0).epsilon(2e-3));
+    // mass-point vertices bevel a convex edge by at most one cell: a triangle with
+    // legs <= h per unit length, so |dV| <= h^2/2 * (sum of edge lengths) = 0.26 mm^3
+    const double bevel = 0.1 * 0.1 / 2 * 4 * (6 + 4 + 3);
+    CHECK(std::abs(dc.signed_volume() - 72.0) <= bevel);
     // the same box through the mesh path (pseudonormal signs)
     Mesh box;
     for (int i = 0; i < 8; ++i)
@@ -79,7 +82,7 @@ TEST_CASE("mesh -> SDF -> DC keeps sharp box edges (QEF)", "[sdf]") {
     CHECK(fm.sample(c + Vec3{2.95, 0.1, 0.2}) == Catch::Approx(-0.05).margin(1e-3));
     Mesh dm = dual_contour(fm);
     CHECK(validate(dm, {.self_intersections = false}).ok);
-    CHECK(dm.signed_volume() == Catch::Approx(72.0).epsilon(2e-3));
+    CHECK(std::abs(dm.signed_volume() - 72.0) <= bevel);
 }
 
 TEST_CASE("brushes: draw adds, carve removes, smooth rounds, grab moves; snapshots stay intact", "[sdf]") {
@@ -109,10 +112,12 @@ TEST_CASE("brushes: draw adds, carve removes, smooth rounds, grab moves; snapsho
     // smoothing a box rounds its edges: volume decreases, vertices leave the corner
     const Vec3 half{2, 2, 2};
     Grid b = from_function([&](const Vec3& p) { return box_sdf(p, half); }, Box3{-half, half}, h);
-    const double Vb = dual_contour(b).signed_volume();
+    // the corner recedes along the diagonal (mean-curvature motion), faces stay put
+    CHECK(b.sample({1.95, 1.95, 1.95}) < 0);
     Stroke sm{Brush::Smooth, {{2, 2, 2}}, 1.0, 1.0};
     for (int i = 0; i < 5; ++i) apply_stroke(b, sm);
-    CHECK(dual_contour(b).signed_volume() < Vb - 1e-3);
+    CHECK(b.sample({1.95, 1.95, 1.95}) > 0);
+    CHECK(std::abs(b.sample({2.0, 0.0, 0.0})) < 0.02);  // flat face centre unchanged
     CHECK(b.sample({1.95, 1.95, 1.95}) > 0);  // the corner is rounded away
 
     // grab drags the pole up by ~ the path length
@@ -137,4 +142,35 @@ TEST_CASE("chunk meshes tile the welded surface", "[sdf]") {
     for (const auto& c : chunks_of(g)) (g.chunk_key(c) == before[{c.x, c.y, c.z}] ? same : changed)++;
     CHECK(changed >= 1);
     CHECK(same > changed);
+}
+
+TEST_CASE("welded chunk meshes are closed; live (incremental) strokes equal replay bit for bit", "[sdf]") {
+    Grid g = sphere_grid(3.0, 0.1);
+    Mesh w = weld(chunk_meshes(g));
+    auto rep = validate(w, {.self_intersections = false});
+    INFO(rep.summary());
+    CHECK(rep.ok);
+    CHECK(w.F.size() == dual_contour(g).F.size());
+    CHECK(w.signed_volume() == Catch::Approx(dual_contour(g).signed_volume()).epsilon(1e-12));
+
+    Stroke s{Brush::Draw, {{-1, 0, 3}, {-0.3, 0.2, 3}, {0.4, 0.1, 3}, {1.2, -0.2, 2.9}}, 0.8, 0.7};
+    Grid replay = g, live = g;
+    apply_stroke(replay, s);
+    StrokeApplier a(live, s.brush, s.radius, s.strength);
+    for (const auto& p : s.path) {
+        a.add(p);
+        (void)a.take_touched();  // the viewport would remesh here
+    }
+    a.finish();
+    REQUIRE(live.brick_count() == replay.brick_count());
+    bool same = true;
+    for (const auto& [b, br] : replay.bricks()) {
+        auto it = live.bricks().find(b);
+        same = same && it != live.bricks().end() && it->second->v == br->v;
+    }
+    CHECK(same);
+    // after the stroke only the touched chunks need new meshes
+    Mesh w2 = weld(chunk_meshes(live));
+    CHECK(validate(w2, {.self_intersections = false}).ok);
+    CHECK(w2.signed_volume() > w.signed_volume());
 }

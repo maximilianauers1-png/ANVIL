@@ -55,7 +55,15 @@ struct ValidationReport {
 struct ValidationOptions {
     bool self_intersections = true;
     std::size_t max_issues_per_kind = 8;
+    /// Absolute floor (mm) of the intersection tolerance. For float32 data
+    /// (STL) it must not be below the representation error, else touching
+    /// faces read as crossing; see float_tolerance().
+    double abs_tol_mm = 0.0;
 };
+
+/// Intersection tolerance for float32 positions: tol::kExportSliverUlps ulps
+/// of the largest coordinate magnitude.
+double float_tolerance(const Mesh& m);
 
 ValidationReport validate(const Mesh& m, const ValidationOptions& opt = {});
 

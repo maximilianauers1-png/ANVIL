@@ -288,7 +288,8 @@ RecoveryReport Session::replay(const std::filesystem::path& journal) {
 }
 
 void Session::save(const std::filesystem::path& path) {
-    write_file_atomic(path, doc_.state()->to_python("saved by ANVIL"));
+    // current(): inside a running command (script) this includes its changes so far
+    write_file_atomic(path, doc_.current()->to_python("saved by ANVIL"));
 }
 
 ExecResult Session::open(const std::filesystem::path& path) {

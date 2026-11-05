@@ -128,10 +128,17 @@ bool plane_interval(const Vec3 T[3], const double dist[3], const Vec3& D, double
 }
 
 // Full triangle-triangle test for triangles that share no vertex.
-bool tri_tri(const Vec3 P[3], const Vec3 Q[3], double L) {
+bool tri_tri(const Vec3 P[3], const Vec3 Q[3], double L, double abs_tol) {
     Vec3 n1 = cross(P[1] - P[0], P[2] - P[0]);
     Vec3 n2 = cross(Q[1] - Q[0], Q[2] - Q[0]);
-    double e1 = tol::kSelfIntersectRel * L * norm(n1), e2 = tol::kSelfIntersectRel * L * norm(n2);
+    const double r = std::max(tol::kSelfIntersectRel * L, abs_tol);  // distance tolerance (mm)
+    // disjoint boxes (BVH leaves hold several triangles, so pairs arrive unfiltered)
+    for (int a = 0; a < 3; ++a) {
+        const double plo = std::min({P[0][a], P[1][a], P[2][a]}), phi = std::max({P[0][a], P[1][a], P[2][a]});
+        const double qlo = std::min({Q[0][a], Q[1][a], Q[2][a]}), qhi = std::max({Q[0][a], Q[1][a], Q[2][a]});
+        if (plo > qhi + r || qlo > phi + r) return false;
+    }
+    double e1 = r * norm(n1), e2 = r * norm(n2);
     double dq[3], dp[3];
     for (int i = 0; i < 3; ++i) {
         dq[i] = dot(n1, Q[i] - P[0]);
@@ -143,13 +150,21 @@ bool tri_tri(const Vec3 P[3], const Vec3 Q[3], double L) {
         return (d[0] > 0 && d[1] > 0 && d[2] > 0) || (d[0] < 0 && d[1] < 0 && d[2] < 0);
     };
     if (same_side(dq) || same_side(dp)) return false;
-    if (dq[0] == 0 && dq[1] == 0 && dq[2] == 0)
-        return coplanar_overlap(P, Q, n1, tol::kSelfIntersectRel * L * L);
+    // coplanar at this tolerance if either triangle lies in the other's plane
+    if ((dq[0] == 0 && dq[1] == 0 && dq[2] == 0) || (dp[0] == 0 && dp[1] == 0 && dp[2] == 0))
+        return coplanar_overlap(P, Q, n1, r * L);
+    // The two triangles straddle each other's planes (else same_side returned).
+    // Distances are only known to +-r, so points on the intersection line are
+    // only known to r / sin(theta); the interval test along that line is
+    // meaningful while this is small against the triangles (< 1 % of L). Else
+    // the planes are nearly parallel at this tolerance: decide in the common plane.
+    const double sin_angle = norm(cross(n1, n2)) / std::max(norm(n1) * norm(n2), 1e-300);
+    if (r >= 0.01 * L * sin_angle) return coplanar_overlap(P, Q, n1, r * L);
     Vec3 D = normalized(cross(n1, n2));
     double a0, a1, b0, b1;
     if (!plane_interval(P, dp, D, a0, a1) || !plane_interval(Q, dq, D, b0, b1)) return false;
     double overlap = std::min(a1, b1) - std::max(a0, b0);
-    return overlap > tol::kSelfIntersectRel * L;  // touching is not an intersection
+    return overlap > r;  // touching is not an intersection
 }
 
 // Segment (a,b) crosses the interior of triangle T (strict, tolerance-relative).
@@ -168,18 +183,19 @@ bool seg_tri(const Vec3& a, const Vec3& b, const Vec3 T[3]) {
     return u > eps && v > eps && u + v < 1.0 - eps && t > eps && t < 1.0 - eps;
 }
 
-bool shared_vertex_intersects(const Vec3 P[3], int ip, const Vec3 Q[3], int iq, double L) {
+bool shared_vertex_intersects(const Vec3 P[3], int ip, const Vec3 Q[3], int iq, double L, double abs_tol) {
     // P[ip] == Q[iq] is the shared vertex v.
     const Vec3& p1 = P[(ip + 1) % 3]; const Vec3& p2 = P[(ip + 2) % 3];
     const Vec3& q1 = Q[(iq + 1) % 3]; const Vec3& q2 = Q[(iq + 2) % 3];
     Vec3 n1 = cross(P[1] - P[0], P[2] - P[0]);
-    double e1 = tol::kSelfIntersectRel * L * norm(n1);
+    const double r = std::max(tol::kSelfIntersectRel * L, abs_tol);
+    double e1 = r * norm(n1);
     bool coplanar = std::abs(dot(n1, q1 - P[ip])) <= e1 && std::abs(dot(n1, q2 - P[ip])) <= e1;
     if (!coplanar) return seg_tri(p1, p2, Q) || seg_tri(q1, q2, P);
     // Coplanar: wedges at v overlap, or far edges cross.
     int d = drop_axis(n1);
     V2 v = proj(P[ip], d), a1 = proj(p1, d), a2 = proj(p2, d), b1 = proj(q1, d), b2 = proj(q2, d);
-    const double eps2 = tol::kSelfIntersectRel * L * L;
+    const double eps2 = r * L;
     auto in_wedge = [&](V2 x, V2 w1, V2 w2) {  // x strictly inside the wedge (v; w1, w2)
         double s = orient2(v, w1, w2) > 0 ? 1.0 : -1.0;
         return s * orient2(v, w1, x) > eps2 && s * orient2(v, x, w2) > eps2;
@@ -191,16 +207,16 @@ bool shared_vertex_intersects(const Vec3 P[3], int ip, const Vec3 Q[3], int iq, 
     return seg_cross2(a1, a2, b1, b2, eps2);
 }
 
-bool shared_edge_fold(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, double L) {
+bool shared_edge_fold(const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d, double L, double abs_tol) {
     // Triangles (a,b,c) and (b,a,d) share edge ab. They overlap iff coplanar and
     // c, d lie on the same side of ab.
     Vec3 n1 = cross(b - a, c - a);
-    if (std::abs(dot(n1, d - a)) > tol::kSelfIntersectRel * L * norm(n1)) return false;
+    if (std::abs(dot(n1, d - a)) > std::max(tol::kSelfIntersectRel * L, abs_tol) * norm(n1)) return false;
     Vec3 n2 = cross(b - a, d - a);
     return dot(n1, n2) > 0;
 }
 
-void check_self_intersections(Ctx& ctx) {
+void check_self_intersections(Ctx& ctx, double abs_tol) {
     const Mesh& m = ctx.m;
     if (m.F.empty()) return;
     Bvh bvh(m);
@@ -229,11 +245,11 @@ void check_self_intersections(Ctx& ctx) {
                     for (int b = 0; b < 3; ++b)
                         if (ti[a] == tj[b]) si[s] = a, sj[s] = b, ++s;
                 bool x = false;
-                if (s == 0) x = tri_tri(P, Q, L);
-                else if (s == 1) x = shared_vertex_intersects(P, si[0], Q, sj[0], L);
+                if (s == 0) x = tri_tri(P, Q, L, abs_tol);
+                else if (s == 1) x = shared_vertex_intersects(P, si[0], Q, sj[0], L, abs_tol);
                 else if (s == 2) {
                     int ci = 3 - si[0] - si[1], cj = 3 - sj[0] - sj[1];
-                    x = shared_edge_fold(m.V[ti[si[0]]], m.V[ti[si[1]]], P[ci], Q[cj], L);
+                    x = shared_edge_fold(m.V[ti[si[0]]], m.V[ti[si[1]]], P[ci], Q[cj], L, abs_tol);
                 } else x = true;  // duplicate triangle
                 if (x) local.emplace_back(std::uint32_t(i), j);
             });
@@ -262,6 +278,12 @@ std::uint32_t find(std::vector<std::uint32_t>& p, std::uint32_t x) {
 }
 
 }  // namespace
+
+double float_tolerance(const Mesh& m) {
+    double mx = 0;
+    for (const auto& p : m.V) mx = std::max({mx, std::abs(p.x), std::abs(p.y), std::abs(p.z)});
+    return tol::kExportSliverUlps * std::ldexp(std::max(mx, 1.0), -23);  // float32: 23 fraction bits
+}
 
 ValidationReport validate(const Mesh& m, const ValidationOptions& opt) {
     auto t0 = std::chrono::steady_clock::now();
@@ -415,7 +437,7 @@ ValidationReport validate(const Mesh& m, const ValidationOptions& opt) {
     }
     r.shells = std::move(shells);
 
-    if (opt.self_intersections && edge_ok) check_self_intersections(ctx);
+    if (opt.self_intersections && edge_ok) check_self_intersections(ctx, opt.abs_tol_mm);
     r.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     return r;
 }

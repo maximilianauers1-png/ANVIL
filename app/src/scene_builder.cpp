@@ -144,7 +144,7 @@ void SceneBuilder::loop() {
                 so.bounds = sh->mesh->bounds();
                 so.triangles = sh->mesh->F.size();
                 so.volume = sh->mesh->signed_volume();
-                so.manifold = bool(sh->solid);
+                so.manifold = bool(sh->solid) || (sh->grid && !sh->mesh->F.empty());
                 if (!sh->solid) so.error = sh->error;
                 if (o->visible) scene->bounds.add(so.bounds);
             } catch (const std::exception& e) {

@@ -43,4 +43,7 @@ if(ANVIL_BUILD_GEOM)
   add_test(NAME acceptance_m2
            COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/m2_suite.py)
   set_tests_properties(acceptance_m2 PROPERTIES PASS_REGULAR_EXPRESSION "M2 SUITE OK" TIMEOUT 600)
+  add_test(NAME acceptance_m3
+           COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/m3_suite.py)
+  set_tests_properties(acceptance_m3 PROPERTIES PASS_REGULAR_EXPRESSION "M3 SUITE OK" TIMEOUT 600)
 endif()

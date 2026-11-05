@@ -40,6 +40,7 @@ const char* node_kind_name(NodeKind k) {
         case NodeKind::Ref: return "Ref";
         case NodeKind::Solidify: return "Solidify";
         case NodeKind::Deform: return "Deform";
+        case NodeKind::Sculpt: return "Sculpt";
     }
     return "?";
 }
@@ -247,6 +248,37 @@ NodePtr make_feature(NodeKind k, std::vector<NodePtr> inputs, std::map<std::stri
 
 NodePtr make_ref(const std::string& name) { return make_feature(NodeKind::Ref, {}, {}, {{"name", name}}); }
 
+NodePtr make_sculpt(NodePtr src, double voxel, std::vector<sdf::Stroke> strokes) {
+    if (!src) throw GeometryError("sculpt: missing source");
+    if (!(voxel >= tol::kMinVoxelMm)) throw GeometryError("sculpt: voxel size must be >= " + repr_double(tol::kMinVoxelMm) + " mm");
+    for (const auto& s : strokes)
+        if (!(s.radius > 0) || s.path.empty()) throw GeometryError("sculpt: every stroke needs a radius > 0 and a path");
+    auto n = std::make_shared<Node>();
+    n->kind = NodeKind::Sculpt;
+    n->inputs = {std::move(src)};
+    auto d = std::make_shared<SculptData>();
+    d->voxel = voxel;
+    d->strokes = std::move(strokes);
+    n->sculpt = std::move(d);
+    return n;
+}
+
+std::string strokes_to_python(const std::vector<sdf::Stroke>& strokes) {
+    std::ostringstream o;
+    o << "[";
+    for (std::size_t i = 0; i < strokes.size(); ++i) {
+        const auto& s = strokes[i];
+        o << (i ? ", " : "") << "(\"" << sdf::brush_name(s.brush) << "\", " << repr_double(s.radius) << "*mm, "
+          << repr_double(s.strength) << ", [";
+        for (std::size_t k = 0; k < s.path.size(); ++k)
+            o << (k ? ", " : "") << "(" << repr_double(s.path[k].x) << ", " << repr_double(s.path[k].y) << ", "
+              << repr_double(s.path[k].z) << ")";
+        o << "])";
+    }
+    o << "]";
+    return o.str();
+}
+
 NodePtr node_at(const NodePtr& root, const std::string& path) {
     NodePtr cur = root;
     std::size_t i = 0;
@@ -375,6 +407,10 @@ std::string to_python(const NodePtr& n) {
         case NodeKind::StepImport:
             o << "import_step_solid(" << py_str(n->attrs.at("path")) << ", sha256=" << py_str(n->attrs.at("sha256")) << ")";
             break;
+        case NodeKind::Sculpt:
+            o << "sculpted(" << to_python(n->inputs[0]) << ", voxel=" << repr_double(n->sculpt->voxel)
+              << "*mm, strokes=" << strokes_to_python(n->sculpt->strokes) << ")";
+            break;
         default: {  // features: fn(inputs..., params..., attrs...)
             static const std::map<NodeKind, const char*> fn{
                 {NodeKind::Extrude, "extrude"}, {NodeKind::Revolve, "revolve"}, {NodeKind::Fillet, "fillet"},
@@ -462,6 +498,35 @@ const char* kind_word(NodeKind k) { return node_kind_name(k); }
 
 BrepBackend g_backend;
 
+// Process-wide LRU of sculpt grids by prefix key. Grids share bricks, so
+// keeping many stroke states costs only the bricks each stroke changed.
+struct SculptGridCache {
+    std::mutex mu;
+    std::uint64_t tick = 0;
+    std::unordered_map<std::string, std::pair<std::uint64_t, std::shared_ptr<const sdf::Grid>>> map;
+    static constexpr std::size_t kMax = 96;
+    std::shared_ptr<const sdf::Grid> get(const std::string& k) {
+        std::lock_guard lk(mu);
+        auto it = map.find(k);
+        if (it == map.end()) return nullptr;
+        it->second.first = ++tick;
+        return it->second.second;
+    }
+    void put(const std::string& k, std::shared_ptr<const sdf::Grid> g) {
+        std::lock_guard lk(mu);
+        map[k] = {++tick, std::move(g)};
+        if (map.size() > kMax) {
+            auto oldest = std::min_element(map.begin(), map.end(),
+                                           [](const auto& a, const auto& b) { return a.second.first < b.second.first; });
+            map.erase(oldest);
+        }
+    }
+};
+SculptGridCache& sculpt_grid_cache() {
+    static SculptGridCache c;
+    return c;
+}
+
 struct Evaluator {
     const VariableResolver& vars;
     const EvalSettings& set;
@@ -499,7 +564,9 @@ struct Evaluator {
 
     // Mesh-only features (Solidify, Deform, imported meshes) have no exact form.
     bool has_mesh_only(const NodePtr& n) {
-        if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::ImportedMesh) return true;
+        if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::ImportedMesh ||
+            n->kind == NodeKind::Sculpt)
+            return true;
         if (n->kind == NodeKind::Ref) {
             RefGuard g(ref_depth);
             return has_mesh_only(deref(n));
@@ -537,10 +604,88 @@ struct Evaluator {
         if (n->kind == NodeKind::Sketch) o << "|" << sketch_to_python(solve_sketch(*n->sketch, vars, false).first);
         if (n->kind == NodeKind::Boolean) o << "|op=" << int(n->op);
         if (n->kind == NodeKind::ImportedMesh) o << "|mesh=" << n->source_sha256 << "|" << n->mesh.get();
+        if (n->kind == NodeKind::Sculpt) o << "|sculpt=" << sculpt_prefix_key(n, n->sculpt->strokes.size());
         for (const auto& s : param_specs(n->kind))
             if (n->params.count(s.name)) o << "|" << s.name << "=" << repr_double(get(n, s.name));
         for (const auto& c : n->inputs) o << "|(" << key(c) << ")";
         return sha256_hex(o.str());
+    }
+
+    // Sculpt grids: key of the state after the first k strokes, as a hash
+    // chain H_k = SHA-256(H_{k-1} | stroke k), H_0 = SHA-256(source key | voxel).
+    std::string sculpt_prefix_key(const NodePtr& n, std::size_t k) {
+        std::string hk = sha256_hex(key(n->inputs[0]) + "|voxel=" + repr_double(n->sculpt->voxel));
+        for (std::size_t i = 0; i < k; ++i) {
+            const auto& s = n->sculpt->strokes[i];
+            std::ostringstream o;
+            o << hk << "|" << sdf::brush_name(s.brush) << "|" << repr_double(s.radius) << "|" << repr_double(s.strength);
+            for (const auto& p : s.path) o << "|" << repr_double(p.x) << "," << repr_double(p.y) << "," << repr_double(p.z);
+            hk = sha256_hex(o.str());
+        }
+        return hk;
+    }
+
+    std::shared_ptr<const Shape> compute_sculpt(const NodePtr& n) {
+        const auto& sd = *n->sculpt;
+        auto& gc = sculpt_grid_cache();
+        // prefix keys, then the longest cached prefix
+        std::vector<std::string> keys{sha256_hex(key(n->inputs[0]) + "|voxel=" + repr_double(sd.voxel))};
+        for (std::size_t i = 0; i < sd.strokes.size(); ++i) {
+            const auto& s = sd.strokes[i];
+            std::ostringstream o;
+            o << keys.back() << "|" << sdf::brush_name(s.brush) << "|" << repr_double(s.radius) << "|" << repr_double(s.strength);
+            for (const auto& p : s.path) o << "|" << repr_double(p.x) << "," << repr_double(p.y) << "," << repr_double(p.z);
+            keys.push_back(sha256_hex(o.str()));
+        }
+        std::size_t k = sd.strokes.size() + 1;
+        std::shared_ptr<const sdf::Grid> start;
+        while (k-- > 0)
+            if ((start = gc.get(keys[k]))) break;
+        sdf::Grid g(sd.voxel);
+        if (start) {
+            g = *start;
+        } else {
+            k = 0;
+            auto src = eval(n->inputs[0]);
+            if (src->grid && src->grid->h() == sd.voxel) {
+                g = *src->grid;
+            } else {
+                const auto& m = *src->mesh;
+                if (m.F.empty()) throw GeometryError("sculpt: the source has no surface");
+                const double voxels = std::pow(m.bounds().diagonal() / sd.voxel, 3) / 5.2;  // box volume of a cube with this diagonal
+                if (voxels > tol::kMaxSculptGridVoxels)
+                    throw GeometryError("sculpt: voxel " + repr_double(sd.voxel) + " mm is too fine for this object (" +
+                                        std::to_string(long(voxels / 1e6)) + " M voxels in its box); use voxel >= " +
+                                        repr_double(sd.voxel * std::cbrt(voxels / tol::kMaxSculptGridVoxels)) + " mm");
+                g = sdf::from_mesh(m, sd.voxel);
+            }
+            gc.put(keys[0], std::make_shared<const sdf::Grid>(g));
+        }
+        for (std::size_t i = k; i < sd.strokes.size(); ++i) {
+            sdf::apply_stroke(g, sd.strokes[i]);
+            gc.put(keys[i + 1], std::make_shared<const sdf::Grid>(g));
+        }
+        auto sh = std::make_shared<Shape>();
+        sh->grid = std::make_shared<const sdf::Grid>(std::move(g));
+        sh->chunks = sdf::chunk_meshes(*sh->grid);
+        sh->mesh = std::make_shared<const Mesh>(sdf::weld(sh->chunks));
+        if (sh->mesh->F.empty()) sh->error = "the sculpted object has no surface left";
+        return sh;
+    }
+
+    // Sculpt shapes carry no Manifold (building one per stroke would cost more
+    // than the stroke); booleans and deform build it here, on demand.
+    std::shared_ptr<const Shape> solid_shape(std::shared_ptr<const Shape> s) {
+        if (s->solid || !s->grid || s->mesh->F.empty()) return s;
+        manifold::MeshGL64 g;
+        g.numProp = 3;
+        for (const auto& p : s->mesh->V) g.vertProperties.insert(g.vertProperties.end(), {p.x, p.y, p.z});
+        for (const auto& t : s->mesh->F) g.triVerts.insert(g.triVerts.end(), {t[0], t[1], t[2]});
+        manifold::Manifold m(g);
+        auto out = std::make_shared<Shape>(*s);
+        if (m.Status() == manifold::Manifold::Error::NoError) out->solid = std::make_shared<manifold::Manifold>(std::move(m));
+        else out->error = "sculpted surface is not a closed manifold (Manifold status " + std::to_string(int(m.Status())) + ")";
+        return out;
     }
 
     std::shared_ptr<const Shape> eval(const NodePtr& n) {
@@ -624,7 +769,7 @@ struct Evaluator {
                 return from_manifold(Manifold::Revolve({c}, circle_segments(R + r, set.chord_mm / 2)));
             }
             case NodeKind::Boolean: {
-                auto a = eval(n->inputs[0]), b = eval(n->inputs[1]);
+                auto a = solid_shape(eval(n->inputs[0])), b = solid_shape(eval(n->inputs[1]));
                 for (auto* s : {&a, &b})
                     if (!(*s)->solid) throw GeometryError("boolean operand is not a closed manifold: " + (*s)->error);
                 Manifold r = n->op == BoolOp::Union        ? *a->solid + *b->solid
@@ -718,8 +863,9 @@ struct Evaluator {
                 manifold::mat3x4 T({u.x, u.y, u.z}, {v.x, v.y, v.z}, {nn.x, nn.y, nn.z}, {o.x, o.y, o.z});
                 return from_manifold(m.Transform(T));
             }
+            case NodeKind::Sculpt: return compute_sculpt(n);
             case NodeKind::Deform: {
-                auto src = eval(n->inputs[0]);
+                auto src = solid_shape(eval(n->inputs[0]));
                 if (!src->solid) throw GeometryError("deform source is not a closed manifold: " + src->error);
                 double sx = get(n, "sx"), sy = get(n, "sy"), sz = get(n, "sz"), taper = get(n, "taper");
                 double twist = get(n, "twist"), bend = get(n, "bend");
@@ -802,7 +948,7 @@ std::string brep_json(const NodePtr& root, const VariableResolver& vars, const E
         if (n->kind == NodeKind::ImportedMesh)
             throw GeometryError("an imported mesh cannot be combined with B-Rep features (fillet, extrude, ...); "
                                 "mesh-to-solid conversion arrives with the repair tools (M5)");
-        if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform)
+        if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::Sculpt)
             throw GeometryError(std::string(node_kind_name(n->kind)) +
                                 " produces mesh geometry; exact features (fillet, chamfer, shell, extrude, ...) cannot be "
                                 "applied on top of it. Apply the exact features first, then combine with the " +
@@ -866,6 +1012,8 @@ std::shared_ptr<const Shape> evaluate(const NodePtr& n, const VariableResolver& 
     Evaluator ev{vars, s, cache};
     return ev.eval(n);
 }
+
+Mesh export_mesh(const Shape& s) { return s.mesh->rounded_to_float(); }
 
 AnalyticFeatures analytic_features(const NodePtr& root, const VariableResolver& vars) {
     AnalyticFeatures out;

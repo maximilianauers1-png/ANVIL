@@ -1,16 +1,18 @@
 #include "anvil/sdf.hpp"
 
-#include <Eigen/Dense>
-
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
+#include <tuple>
 
 #include "anvil/bvh.hpp"
+#include "anvil/sort.hpp"
 
 namespace anvil::sdf {
 
@@ -347,58 +349,32 @@ struct CellSolver {
     explicit CellSolver(const Grid& g) : acc(g), h(g.h()) {}
 
     // Vertex of cell (i, j, k) in mm; false if the cell has no crossing.
+    // Placement: mass point of the edge crossings (Surface Nets, Gibson 1998).
+    // Measured on the M3 acceptance strokes: the QEF minimiser of Ju et al.
+    // (truncated at sigma_i < 0.1 sigma_1, clamped to the cell) produced 294
+    // self-intersections and 8 degenerate triangles, a QEF displacement
+    // limited to 0.35 h still 7, the mass point 0 -- and an export must pass
+    // the checks. Sharp features come from the exact kernel (booleans with
+    // CAD solids run on the output mesh); see ADR 0017.
     bool vertex(int i, int j, int k, Vec3& out) {
-        float v[4][4][4];  // lattice values i-1 .. i+2
-        for (int z = 0; z < 4; ++z)
-            for (int y = 0; y < 4; ++y)
-                for (int x = 0; x < 4; ++x) v[z][y][x] = acc.at(i - 1 + x, j - 1 + y, k - 1 + z);
-        // central-difference gradients at the 8 cell corners
-        Vec3 gr[2][2][2];
+        float v[2][2][2];
         for (int z = 0; z < 2; ++z)
             for (int y = 0; y < 2; ++y)
-                for (int x = 0; x < 2; ++x)
-                    gr[z][y][x] = Vec3{v[z + 1][y + 1][x + 2] - v[z + 1][y + 1][x], v[z + 1][y + 2][x + 1] - v[z + 1][y][x + 1],
-                                       v[z + 2][y + 1][x + 1] - v[z][y + 1][x + 1]} * 0.5;
-        auto val = [&](int x, int y, int z) { return v[z + 1][y + 1][x + 1]; };
-        auto grad = [&](double x, double y, double z) {  // trilinear in the cell
-            Vec3 r;
-            for (int c = 0; c < 8; ++c) {
-                int cx = c & 1, cy = (c >> 1) & 1, cz = c >> 2;
-                double w = (cx ? x : 1 - x) * (cy ? y : 1 - y) * (cz ? z : 1 - z);
-                r += gr[cz][cy][cx] * w;
-            }
-            return r;
-        };
-        Eigen::Matrix3d A = Eigen::Matrix3d::Zero();
-        Eigen::Vector3d b = Eigen::Vector3d::Zero(), mass = Eigen::Vector3d::Zero();
-        int n = 0;
+                for (int x = 0; x < 2; ++x) v[z][y][x] = acc.at(i + x, j + y, k + z);
         static const int E[12][6] = {{0, 0, 0, 1, 0, 0}, {0, 1, 0, 1, 1, 0}, {0, 0, 1, 1, 0, 1}, {0, 1, 1, 1, 1, 1},
                                      {0, 0, 0, 0, 1, 0}, {1, 0, 0, 1, 1, 0}, {0, 0, 1, 0, 1, 1}, {1, 0, 1, 1, 1, 1},
                                      {0, 0, 0, 0, 0, 1}, {1, 0, 0, 1, 0, 1}, {0, 1, 0, 0, 1, 1}, {1, 1, 0, 1, 1, 1}};
+        double mx = 0, my = 0, mz = 0;
+        int n = 0;
         for (const auto& e : E) {
-            float a = val(e[0], e[1], e[2]), c = val(e[3], e[4], e[5]);
+            const float a = v[e[2]][e[1]][e[0]], c = v[e[5]][e[4]][e[3]];
             if (!crossing(a, c)) continue;
-            double t = a / double(a - c);
-            Eigen::Vector3d p(e[0] + t * (e[3] - e[0]), e[1] + t * (e[4] - e[1]), e[2] + t * (e[5] - e[2]));
-            Vec3 g3 = normalized(grad(p.x(), p.y(), p.z()));
-            Eigen::Vector3d nn(g3.x, g3.y, g3.z);
-            A += nn * nn.transpose();
-            b += nn * nn.dot(p);
-            mass += p;
+            const double t = a / double(a - c);
+            mx += e[0] + t * (e[3] - e[0]), my += e[1] + t * (e[4] - e[1]), mz += e[2] + t * (e[5] - e[2]);
             ++n;
         }
         if (!n) return false;
-        mass /= n;
-        // truncated pseudo-inverse: singular values of the normal matrix are
-        // sqrt(eigenvalues of A); drop sigma_i < 0.1 sigma_1 (M0 plan 3.7)
-        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(A);
-        const Eigen::Vector3d lam = es.eigenvalues();
-        const double lmax = lam.maxCoeff();
-        Eigen::Vector3d rhs = es.eigenvectors().transpose() * (b - A * mass);
-        for (int c = 0; c < 3; ++c) rhs[c] = lam[c] > 0.01 * lmax && lam[c] > 1e-12 ? rhs[c] / lam[c] : 0.0;
-        Eigen::Vector3d x = mass + es.eigenvectors() * rhs;
-        for (int c = 0; c < 3; ++c) x[c] = std::clamp(x[c], 0.0, 1.0);  // stay in the cell
-        out = Vec3{(i + x.x()) * h, (j + x.y()) * h, (k + x.z()) * h};
+        out = Vec3{(i + mx / n) * h, (j + my / n) * h, (k + mz / n) * h};
         return true;
     }
 };
@@ -625,89 +601,206 @@ void reinit(Block& B, IVec3 lo, IVec3 hi) {
 }
 }  // namespace
 
-std::vector<IVec3> apply_stroke(Grid& g, const Stroke& s) {
-    if (s.path.empty() || !(s.radius > 0)) return {};
-    const double h = g.h(), R = s.radius, st = std::clamp(s.strength, 0.0, 1.0);
-    // resample the path into dabs, spacing R/4
-    std::vector<Vec3> dabs{s.path.front()};
-    const double spacing = R / 4;
-    double carry = 0;
-    for (std::size_t i = 1; i < s.path.size(); ++i) {
-        Vec3 a = s.path[i - 1], b = s.path[i];
-        double L = norm(b - a);
-        double t = spacing - carry;
-        while (t <= L) {
-            dabs.push_back(a + (b - a) * (t / L));
-            t += spacing;
-        }
-        carry = L - (t - spacing);
+StrokeApplier::StrokeApplier(Grid& g, Brush brush, double radius, double strength)
+    : g_(g), brush_(brush), R_(radius), st_(std::clamp(strength, 0.0, 1.0)), spacing_(radius / 4) {
+    if (!(radius > 0)) throw std::invalid_argument("sculpt radius must be > 0");
+}
+
+void StrokeApplier::add(const Vec3& p) {
+    if (finished_) return;
+    if (!have_first_) {
+        have_first_ = true;
+        last_point_ = last_dab_ = p;
+        // flatten: plane through the first point, normal = outward field gradient there
+        plane_n_ = normalized(g_.gradient(p));
+        plane_d_ = dot(plane_n_, p);
+        if (brush_ != Brush::Grab) dab(p, {});
+        return;
     }
-    if (s.brush == Brush::Grab && s.path.size() > 1 && !(dabs.back() == s.path.back())) dabs.push_back(s.path.back());
+    // resample the polyline into dabs `spacing` apart
+    const Vec3 a = last_point_, b = p;
+    const double L = norm(b - a);
+    double t = spacing_ - carry_;
+    while (t <= L) {
+        const Vec3 c = a + (b - a) * (t / L);
+        if (brush_ == Brush::Grab) dab(last_dab_, c - last_dab_);
+        else dab(c, {});
+        last_dab_ = c;
+        t += spacing_;
+    }
+    carry_ = L - (t - spacing_);
+    last_point_ = p;
+}
 
-    // flatten: plane through the first dab, normal = outward field gradient there
-    Vec3 pn = normalized(g.gradient(s.path.front()));
-    double pd = dot(pn, s.path.front());
+void StrokeApplier::finish() {
+    if (finished_) return;
+    finished_ = true;
+    if (brush_ == Brush::Grab && have_first_ && !(last_dab_ == last_point_)) dab(last_dab_, last_point_ - last_dab_);
+    std::vector<IVec3> all(all_touched_.begin(), all_touched_.end());
+    g_.compact(all);
+}
 
-    std::unordered_set<IVec3, IVec3Hash> touched;
-    for (std::size_t di = 0; di < dabs.size(); ++di) {
-        const Vec3 c = dabs[di];
-        Vec3 grab{};
-        if (s.brush == Brush::Grab) {
-            if (di == 0) continue;
-            grab = dabs[di] - dabs[di - 1];
-        }
-        const Vec3 cc = s.brush == Brush::Grab ? dabs[di - 1] : c;
-        const double reach = R + (kBand + 1) * h + norm(grab);
-        Block B = load_block(g, cc - Vec3{reach, reach, reach}, cc + Vec3{reach, reach, reach});
-        const Block before = B;
-        // sub-steps keep every update below half a voxel (the band stays valid)
-        double amount = 0;
-        if (s.brush == Brush::Draw || s.brush == Brush::Carve) amount = st * spacing / 4;  // mm per dab
-        if (s.brush == Brush::Grab) amount = norm(grab);
-        const int sub = std::max(1, int(std::ceil(amount / (0.5 * h))));
-        const Vec3 origin = Vec3{double(B.b0.x), double(B.b0.y), double(B.b0.z)} * (kBrick * h);
-        for (int ss = 0; ss < sub; ++ss) {
-            Block src = B;
-            for (int z = 1; z < B.nz - 1; ++z)
-                for (int y = 1; y < B.ny - 1; ++y)
-                    for (int x = 1; x < B.nx - 1; ++x) {
-                        const Vec3 p = origin + Vec3{double(x), double(y), double(z)} * h;
-                        const double q = norm(p - cc) / R;
-                        if (q >= 1.0) continue;
-                        const double w = wendland(q);
-                        float& f = B.at(x, y, z);
-                        switch (s.brush) {
-                            case Brush::Draw: f -= float(w * amount / sub / h); break;
-                            case Brush::Carve: f += float(w * amount / sub / h); break;
-                            case Brush::Smooth: {
-                                if (std::abs(src.at(x, y, z)) >= kBand) break;
-                                double avg = (src.at(x + 1, y, z) + src.at(x - 1, y, z) + src.at(x, y + 1, z) +
-                                              src.at(x, y - 1, z) + src.at(x, y, z + 1) + src.at(x, y, z - 1)) / 6.0;
-                                f = float(src.at(x, y, z) + 0.5 * st * w * (avg - src.at(x, y, z)));
-                                break;
-                            }
-                            case Brush::Grab: {  // semi-Lagrangian: f(x) <- f(x - w delta)
-                                const Vec3 d = grab * (w / sub / h);
-                                f = float(src.sample(x - d.x, y - d.y, z - d.z));
-                                break;
-                            }
-                            case Brush::Flatten: {
-                                if (std::abs(src.at(x, y, z)) >= kBand) break;
-                                double fp = (dot(pn, p) - pd) / h;
-                                f = float(src.at(x, y, z) + 0.5 * st * w * (fp - src.at(x, y, z)));
-                                break;
-                            }
+std::vector<IVec3> StrokeApplier::take_touched() {
+    std::vector<IVec3> out(touched_.begin(), touched_.end());
+    touched_.clear();
+    return out;
+}
+
+void StrokeApplier::dab(const Vec3& cc, const Vec3& grab) {
+    ++dabs_;
+    const double h = g_.h(), R = R_, st = st_;
+    const double reach = R + (kBand + 1) * h + norm(grab);
+    Block B = load_block(g_, cc - Vec3{reach, reach, reach}, cc + Vec3{reach, reach, reach});
+    const Block before = B;
+    // sub-steps keep every update below half a voxel (the band stays valid)
+    double amount = 0;
+    if (brush_ == Brush::Draw || brush_ == Brush::Carve) amount = st * spacing_ / 4;  // mm per dab
+    if (brush_ == Brush::Grab) amount = norm(grab);
+    const int sub = std::max(1, int(std::ceil(amount / (0.5 * h))));
+    const Vec3 origin = Vec3{double(B.b0.x), double(B.b0.y), double(B.b0.z)} * (kBrick * h);
+    const Vec3 pn = plane_n_;
+    const double pd = plane_d_;
+    for (int ss = 0; ss < sub; ++ss) {
+        const Block src = B;
+        for (int z = 1; z < B.nz - 1; ++z)
+            for (int y = 1; y < B.ny - 1; ++y)
+                for (int x = 1; x < B.nx - 1; ++x) {
+                    const Vec3 p = origin + Vec3{double(x), double(y), double(z)} * h;
+                    const double q = norm(p - cc) / R;
+                    if (q >= 1.0) continue;
+                    const double w = wendland(q);
+                    float& f = B.at(x, y, z);
+                    switch (brush_) {
+                        case Brush::Draw: f -= float(w * amount / sub / h); break;
+                        case Brush::Carve: f += float(w * amount / sub / h); break;
+                        case Brush::Smooth: {
+                            // MBO-style (Merriman, Bence & Osher 1992): diffuse the clamped
+                            // indicator c = clamp(f/h, -1, 1), which moves the zero level by
+                            // mean curvature. Averaging f itself would pull the interior
+                            // medial axis (ridge of the SDF) into convex corners and sharpen them.
+                            const float f0 = src.at(x, y, z);
+                            if (std::abs(f0) >= 1.5f) break;
+                            auto c = [](float v) { return std::clamp(v, -1.0f, 1.0f); };
+                            double avg = (c(src.at(x + 1, y, z)) + c(src.at(x - 1, y, z)) + c(src.at(x, y + 1, z)) +
+                                          c(src.at(x, y - 1, z)) + c(src.at(x, y, z + 1)) + c(src.at(x, y, z - 1))) / 6.0;
+                            f = float(f0 + 0.5 * st * w * (avg - c(f0)));
+                            break;
+                        }
+                        case Brush::Grab: {  // semi-Lagrangian: f(x) <- f(x - w delta)
+                            const Vec3 d = grab * (w / sub / h);
+                            f = float(src.sample(x - d.x, y - d.y, z - d.z));
+                            break;
+                        }
+                        case Brush::Flatten: {
+                            if (std::abs(src.at(x, y, z)) >= kBand) break;
+                            double fp = (dot(pn, p) - pd) / h;
+                            f = float(src.at(x, y, z) + 0.5 * st * w * (fp - src.at(x, y, z)));
+                            break;
                         }
                     }
-            // voxels the dab can influence (+ the band), in block coordinates
-            const int rv = int(std::ceil(reach / h));
-            const Vec3 cb = (cc - origin) / h;
-            reinit(B, {int(cb.x) - rv, int(cb.y) - rv, int(cb.z) - rv}, {int(cb.x) + rv, int(cb.y) + rv, int(cb.z) + rv});
-        }
-        for (const auto& b : store_block(g, B, before)) touched.insert(b);
+                }
+        const int rv = int(std::ceil(reach / h));
+        const Vec3 cb = (cc - origin) / h;
+        reinit(B, {int(cb.x) - rv, int(cb.y) - rv, int(cb.z) - rv}, {int(cb.x) + rv, int(cb.y) + rv, int(cb.z) + rv});
     }
-    std::vector<IVec3> out(touched.begin(), touched.end());
-    g.compact(out);
+    for (const auto& b : store_block(g_, B, before)) touched_.insert(b), all_touched_.insert(b);
+}
+
+std::vector<IVec3> apply_stroke(Grid& g, const Stroke& s) {
+    if (s.path.empty()) return {};
+    StrokeApplier a(g, s.brush, s.radius, s.strength);
+    for (const auto& p : s.path) a.add(p);
+    a.finish();
+    return a.take_touched();
+}
+
+// ------------------------------------------------------------------ chunk meshes
+namespace {
+// cell coordinates packed into 63 bits (21 bits per axis, offset 2^20):
+// +-1.0e6 cells = +-52 m at h = 0.05 mm
+inline std::uint64_t pack_cell(const IVec3& c) {
+    const std::uint64_t o = 1u << 20;
+    return ((std::uint64_t(c.x + o) & 0x1fffff) << 42) | ((std::uint64_t(c.y + o) & 0x1fffff) << 21) |
+           (std::uint64_t(c.z + o) & 0x1fffff);
+}
+struct ChunkCache {
+    std::mutex mu;
+    std::unordered_map<std::uint64_t, std::pair<std::uint64_t, std::shared_ptr<const ChunkMesh>>> map;
+    std::uint64_t tick = 0;
+    static constexpr std::size_t kMax = 40000;
+};
+ChunkCache& chunk_cache() {
+    static ChunkCache c;
+    return c;
+}
+std::shared_ptr<const ChunkMesh> build_chunk(const Grid& g, const IVec3& chunk, std::uint64_t key) {
+    auto cm = std::make_shared<ChunkMesh>();
+    cm->key = key, cm->chunk = chunk;
+    std::unordered_map<IVec3, std::uint32_t, CellKeyHash> vmap;
+    contour(g, [&](const IVec3& b) { return chunk_of_brick(b) == chunk; }, vmap, cm->mesh);
+    cm->cell.resize(cm->mesh.V.size());
+    for (const auto& [c, id] : vmap) cm->cell[id] = pack_cell(c);
+    return cm;
+}
+}  // namespace
+
+std::shared_ptr<const ChunkMesh> chunk_mesh(const Grid& g, const IVec3& chunk) {
+    const std::uint64_t key = g.chunk_key(chunk);
+    auto& cc = chunk_cache();
+    {
+        std::lock_guard lk(cc.mu);
+        auto it = cc.map.find(key);
+        if (it != cc.map.end()) {
+            it->second.first = ++cc.tick;
+            return it->second.second;
+        }
+    }
+    auto cm = build_chunk(g, chunk, key);
+    std::lock_guard lk(cc.mu);
+    cc.map[key] = {++cc.tick, cm};
+    if (cc.map.size() > ChunkCache::kMax) {  // drop the oldest quarter
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> ages;
+        for (const auto& [k, v] : cc.map) ages.push_back({v.first, k});
+        std::nth_element(ages.begin(), ages.begin() + ages.size() / 4, ages.end());
+        for (std::size_t i = 0; i < ages.size() / 4; ++i) cc.map.erase(ages[i].second);
+    }
+    return cm;
+}
+
+std::vector<std::shared_ptr<const ChunkMesh>> chunk_meshes(const Grid& g) {
+    auto chunks = chunks_of(g);
+    std::sort(chunks.begin(), chunks.end(), [](const IVec3& a, const IVec3& b) {
+        return std::tie(a.z, a.y, a.x) < std::tie(b.z, b.y, b.x);
+    });
+    std::vector<std::shared_ptr<const ChunkMesh>> out(chunks.size());
+    parallel_for(chunks.size(), [&](std::size_t i) { out[i] = chunk_mesh(g, chunks[i]); });
+    return out;
+}
+
+Mesh weld(const std::vector<std::shared_ptr<const ChunkMesh>>& parts) {
+    std::size_t nv = 0;
+    for (const auto& p : parts) nv += p->mesh.V.size();
+    std::vector<std::uint64_t> keys;
+    std::vector<std::uint32_t> idx;
+    keys.reserve(nv), idx.reserve(nv);
+    std::vector<std::size_t> base;
+    for (const auto& p : parts) {
+        base.push_back(keys.size());
+        for (std::size_t i = 0; i < p->mesh.V.size(); ++i) keys.push_back(p->cell[i]), idx.push_back(std::uint32_t(idx.size()));
+    }
+    radix_sort_pairs(keys, idx, 63);
+    std::vector<std::uint32_t> remap(nv);
+    Mesh out;
+    std::vector<Vec3> flat;
+    flat.reserve(nv);
+    for (const auto& p : parts) flat.insert(flat.end(), p->mesh.V.begin(), p->mesh.V.end());
+    for (std::size_t i = 0; i < nv; ++i) {
+        if (i == 0 || keys[i] != keys[i - 1]) out.V.push_back(flat[idx[i]]);
+        remap[idx[i]] = std::uint32_t(out.V.size() - 1);
+    }
+    for (std::size_t pi = 0; pi < parts.size(); ++pi)
+        for (const auto& t : parts[pi]->mesh.F)
+            out.F.push_back({remap[base[pi] + t[0]], remap[base[pi] + t[1]], remap[base[pi] + t[2]]});
     return out;
 }
 

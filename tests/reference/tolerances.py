@@ -35,3 +35,10 @@ DEFAULT_CHORD_MM: float = 0.01  # M1: equal to the export default (ADR 0006)
 def close(a: float, b: float, rel: float = REL_NUMERIC, abs_: float = ABS_NUMERIC_MM) -> bool:
     """|a−b| ≤ max(abs, rel·max(|a|,|b|)) — symmetrisch, im Gegensatz zu math.isclose-Defaults."""
     return abs(a - b) <= max(abs_, rel * max(abs(a), abs(b)))
+
+# --- Ebene 3: Sculpting (M3, ADR 0008) ----------------------------------------
+# Voxelgröße der SDF-Bricks: Standard 50 µm, Untergrenze 10 µm; Obergrenze der
+# Voxel in der Bounding-Box eines Objekts.
+DEFAULT_VOXEL_MM: float = 0.05
+MIN_VOXEL_MM: float = 0.01
+MAX_SCULPT_GRID_VOXELS: float = 1e10

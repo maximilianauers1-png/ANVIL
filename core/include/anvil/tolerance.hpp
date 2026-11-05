@@ -33,6 +33,23 @@ inline constexpr double kDefaultExportChordMm = kDefaultChordMm;
 // Lower bound for user-provided chord errors (mm): below this the mesh explodes
 // without any printable benefit (resin XY pixels are ~18-50 um).
 inline constexpr double kMinChordMm = 1e-4;
+// Self-intersection tolerance floor for float32 (STL) data: this many float32
+// ulps of the largest coordinate. Boolean results contain faces that touch
+// along sub-ulp slivers; rounding to float moves them by up to 1/2 ulp, which
+// a purely relative tolerance (kSelfIntersectRel * L) would read as crossing.
+// 16 ulps at 50 mm = 0.1 um (<< chord 10 um, << printer pixel 18 um; slicers
+// work on 1 nm integers).
+inline constexpr double kExportSliverUlps = 16.0;
+
+// Sculpt voxels (ADR 0008). 50 um default: DC sagitta kappa h^2 / 8 = 3 um at a
+// 0.1 mm radius; structures below 2h vanish (detail linter, M5). 10 um is the
+// floor: half the XY pixel of the Mars 5 Ultra (~18 um), finer gains nothing.
+inline constexpr double kDefaultVoxelMm = 0.05;
+inline constexpr double kMinVoxelMm = 0.01;
+// Bound on the voxels of an object's bounding box at the chosen voxel size
+// (only the narrow band is stored, but classification visits the box; 1e10
+// = a 107 mm cube at 50 um).
+inline constexpr double kMaxSculptGridVoxels = 1e10;
 
 /// |a-b| <= max(abs, rel*max(|a|,|b|)) -- symmetric, unlike many isclose variants.
 inline bool close(double a, double b, double rel = kRelNumeric, double abs = kAbsNumericMm) {

@@ -11,6 +11,7 @@ functions; every UI action is written as a call to them (ADR 0005).
 from __future__ import annotations
 
 import json as _json
+import math
 import os as _os
 from numbers import Real
 from typing import Iterable, Union
@@ -29,7 +30,7 @@ __all__ = [
     "export_step", "solidify", "deform", "sketch_polyline", "sketch_rect", "sketch_circle", "extrude_sketch",
     "cut_sketch", "solidify_sketch", "revolve_sketch", "sketch_move", "sketch_dim", "sketch_constrain",
     "sketch_set", "sketch_delete", "deform_object", "cut_with", "fillet_object", "chamfer_object",
-    "shell_object", "edit_preview", "view", "theme", "display", "scenery", "select", "set_unit", "GeometryError",
+    "shell_object", "edit_preview", "view", "theme", "display", "scenery", "select", "sculpt", "sculptable", "sculpted", "set_unit", "GeometryError",
 ]
 
 GeometryError = _a.GeometryError
@@ -594,6 +595,72 @@ def display(mode: str = "shaded"):
     if mode not in ("shaded", "mesh"):
         raise ValueError("display(): 'shaded' or 'mesh'")
     _a.ui_request(_json.dumps({"request": "display", "mode": mode}))
+
+
+# --------------------------------------------------------------------------- sculpting (M3)
+
+_BRUSHES = ("draw", "carve", "smooth", "grab", "flatten")
+
+
+def _voxel_for(name: str, voxel) -> float:
+    if voxel is not None:
+        return _coord_mm(voxel, "voxel")
+    # default 50 um, coarser for big objects so the box stays below the voxel bound
+    bb = info(name)["bbox"]
+    diag = math.dist(bb[0], bb[1])
+    h = _a.DEFAULT_VOXEL_MM
+    box_voxels = (diag / h) ** 3 / 5.196  # cube with this diagonal
+    if box_voxels > 1e9:
+        h *= (box_voxels / 1e9) ** (1 / 3)
+    return float(f"{h:.3g}")
+
+
+def _coord_mm(v, what: str) -> float:
+    if isinstance(v, Quantity):
+        if v.dim != LENGTH:
+            raise TypeError(f"{what} must be a length")
+        return v.value
+    raise TypeError(f"{what} needs a unit, e.g. 0.05*mm")
+
+
+def sculpted(src, voxel=0.05 * mm, strokes=()) -> Solid:
+    """A solid as a sculptable distance field (sparse bricks) with strokes
+    applied in order. strokes: [(brush, radius, strength, [(x, y, z), ...])]."""
+    out = []
+    for s in strokes:
+        brush, radius, strength, path = s
+        out.append((str(brush), _coord_mm(radius, "radius"), float(strength), [tuple(map(float, p)) for p in path]))
+    return Solid(_a.make_sculpt(_node(src), _coord_mm(voxel, "voxel"), out))
+
+
+def sculptable(obj, voxel=None) -> Obj:
+    """Turns an object into a sculptable one (voxel default 0.05 mm, coarser
+    for large objects). The original stays as the parametric source."""
+    name = _name(obj)
+    node = _a.get(name)
+    if node.kind == "Sculpt":
+        return Obj(name)
+    _a.set_root(name, _a.make_sculpt(node, _voxel_for(name, voxel), []))
+    return Obj(name)
+
+
+def sculpt(obj, brush: str = "draw", path=(), radius=2 * mm, strength: float = 0.5) -> Obj:
+    """One sculpt stroke (one undo step): brush draw | carve | smooth | grab |
+    flatten along `path` (points in mm on or near the surface)."""
+    if brush not in _BRUSHES:
+        raise ValueError(f"sculpt(): brush must be one of {', '.join(_BRUSHES)}")
+    if not path:
+        raise ValueError("sculpt(): empty path")
+    if not 0 <= strength <= 1:
+        raise ValueError("sculpt(): strength must be within 0..1")
+    name = _name(obj)
+    sculptable(name)
+    node = _a.get(name)
+    voxel, strokes = node.sculpt_info()
+    strokes = list(strokes) + [(brush, _coord_mm(radius, "radius"), float(strength),
+                                [tuple(float(c) for c in p) for p in path])]
+    _a.set_root(name, _a.make_sculpt(node.child("src"), voxel, strokes))
+    return Obj(name)
 
 
 def scenery(name: str = "sunset"):
