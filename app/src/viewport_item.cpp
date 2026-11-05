@@ -102,8 +102,8 @@ void ViewportItem::sync() {
     // (from +X towards +Y); exposure compensates the different illuminances.
     {
         // exposure and haze tuned against the scattering model (bench/scenery_tune.py)
-        struct Scene { const char* name; int id; double el_deg, az_deg; float exposure, haze; };
-        static const Scene scenes[] = {{"sunset", 1, 2.0, 200, 12.0f, 2.0f},
+        struct SceneryDef { const char* name; int id; double el_deg, az_deg; float exposure, haze; };
+        static const SceneryDef scenes[] = {{"sunset", 1, 2.0, 200, 12.0f, 2.0f},
                                        {"fjord", 2, 24, 20, 8.0f, 1.5f},
                                        {"night", 3, 32, 150, 0.9f, 1.0f}};
         in.scenery = 0;

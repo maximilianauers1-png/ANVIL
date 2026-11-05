@@ -160,6 +160,80 @@ std::optional<RayHit> Bvh::raycast(const Vec3& o, const Vec3& d, double t_min, d
     return best;
 }
 
+Vec3 closest_point_on_triangle(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c, int& feature) {
+    const Vec3 ab = b - a, ac = c - a, ap = p - a;
+    const double d1 = dot(ab, ap), d2 = dot(ac, ap);
+    if (d1 <= 0 && d2 <= 0) return feature = 4, a;
+    const Vec3 bp = p - b;
+    const double d3 = dot(ab, bp), d4 = dot(ac, bp);
+    if (d3 >= 0 && d4 <= d3) return feature = 5, b;
+    const double vc = d1 * d4 - d3 * d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+        const double v = d1 / (d1 - d3);
+        return feature = 1, a + ab * v;
+    }
+    const Vec3 cp = p - c;
+    const double d5 = dot(ab, cp), d6 = dot(ac, cp);
+    if (d6 >= 0 && d5 <= d6) return feature = 6, c;
+    const double vb = d5 * d2 - d1 * d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+        const double w = d2 / (d2 - d6);
+        return feature = 3, a + ac * w;
+    }
+    const double va = d3 * d6 - d5 * d4;
+    if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+        const double w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return feature = 2, b + (c - b) * w;
+    }
+    const double denom = 1.0 / (va + vb + vc);
+    const double v = vb * denom, w = vc * denom;
+    feature = 0;
+    return a + ab * v + ac * w;
+}
+
+namespace {
+double box_dist2(const Box3& b, const Vec3& p) {
+    double d = 0;
+    for (int i = 0; i < 3; ++i) {
+        double lo = b.lo[i], hi = b.hi[i], v = p[i];
+        double e = v < lo ? lo - v : v > hi ? v - hi : 0.0;
+        d += e * e;
+    }
+    return d;
+}
+}  // namespace
+
+std::optional<ClosestHit> Bvh::closest(const Vec3& p, double max_dist) const {
+    if (nodes_.empty()) return std::nullopt;
+    ClosestHit best;
+    double best_d2 = max_dist * max_dist;
+    bool found = false;
+    std::uint32_t stack[128];
+    int sp = 0;
+    stack[sp++] = 0;
+    while (sp) {
+        const Node& nd = nodes_[stack[--sp]];
+        if (box_dist2(nd.box, p) >= best_d2) continue;
+        if (nd.count) {
+            for (std::uint32_t k = nd.first; k < nd.first + nd.count; ++k) {
+                const Tri& t = mesh_->F[order_[k]];
+                int f = 0;
+                Vec3 q = closest_point_on_triangle(p, mesh_->V[t[0]], mesh_->V[t[1]], mesh_->V[t[2]], f);
+                double d2 = dot(q - p, q - p);
+                if (d2 < best_d2) best_d2 = d2, best = {order_[k], q, d2, f}, found = true;
+            }
+        } else if (sp + 2 <= 128) {
+            // nearer child last (popped first)
+            const Node& l = nodes_[nd.first];
+            const Node& r = nodes_[nd.right];
+            if (box_dist2(l.box, p) < box_dist2(r.box, p)) stack[sp++] = nd.right, stack[sp++] = nd.first;
+            else stack[sp++] = nd.first, stack[sp++] = nd.right;
+        }
+    }
+    if (!found) return std::nullopt;
+    return best;
+}
+
 void Bvh::query(const Box3& box, const std::function<void(std::uint32_t)>& f) const {
     if (nodes_.empty()) return;
     std::uint32_t stack[128];
