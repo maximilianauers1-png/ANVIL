@@ -6,7 +6,8 @@
 namespace anvil {
 
 namespace {
-constexpr double kOrthoDepthRange = 1e6;  // mm, +/- range of the orthographic depth slab
+constexpr double kOrthoRangeFactor = 20.0;  // slab half depth = 20 x camera distance
+constexpr double kOrthoRangeMin = 100.0, kOrthoRangeMax = 1e6;  // mm
 constexpr double kMinDistance = 1e-3;     // mm
 constexpr double kMaxDistance = 1e7;      // mm
 constexpr double kPitchLimit = std::numbers::pi / 2;
@@ -19,6 +20,8 @@ Vec3 Camera::right() const { return {-std::sin(yaw), std::cos(yaw), 0.0}; }
 Vec3 Camera::up() const { return cross(right(), forward()); }
 
 double Camera::near_plane() const { return std::max(distance * 1e-3, 1e-4); }
+
+double Camera::ortho_range() const { return std::clamp(distance * kOrthoRangeFactor, kOrthoRangeMin, kOrthoRangeMax); }
 
 Mat4 Camera::view_rotation() const {
     Vec3 r = right(), u = up(), f = forward();
@@ -35,7 +38,7 @@ Mat4 Camera::projection() const {
         return {1 / (t * aspect), 0, 0, 0, 0, -1 / t, 0, 0, 0, 0, 0, -1, 0, 0, n, 0};
     }
     const double hh = distance * t, hw = hh * aspect;
-    const double nr = -kOrthoDepthRange, fr = kOrthoDepthRange;
+    const double nr = -ortho_range(), fr = ortho_range();
     // depth = (fr + z)/(fr - nr)  (reversed: near -> 1)
     return {1 / hw, 0, 0, 0, 0, -1 / hh, 0, 0, 0, 0, 1 / (fr - nr), 0, 0, 0, fr / (fr - nr), 1};
 }
@@ -64,7 +67,7 @@ Ray Camera::ray(double px, double py) const {
     double nx = 2 * px / width - 1, ny = 1 - 2 * py / height;
     if (!ortho) return {eye(), normalized(forward() + right() * (nx * t * aspect) + up() * (ny * t))};
     Vec3 o = eye() + right() * (nx * distance * t * aspect) + up() * (ny * distance * t);
-    return {o - forward() * kOrthoDepthRange * 0.5, forward()};
+    return {o - forward() * ortho_range() * 0.5, forward()};
 }
 
 double Camera::world_per_pixel(double depth) const {
@@ -94,10 +97,10 @@ void Camera::pan_pixels(double dx, double dy) {
 void Camera::zoom_at(double factor, double px, double py) {
     // Keep the point under the cursor on the focal plane fixed.
     Ray before = ray(px, py);
-    Vec3 p_before = ortho ? before.origin + before.dir * (kOrthoDepthRange * 0.5) : before.origin + before.dir * (distance / dot(before.dir, forward()));
+    Vec3 p_before = ortho ? before.origin + before.dir * (ortho_range() * 0.5) : before.origin + before.dir * (distance / dot(before.dir, forward()));
     distance = std::clamp(distance * factor, kMinDistance, kMaxDistance);
     Ray after = ray(px, py);
-    Vec3 p_after = ortho ? after.origin + after.dir * (kOrthoDepthRange * 0.5) : after.origin + after.dir * (distance / dot(after.dir, forward()));
+    Vec3 p_after = ortho ? after.origin + after.dir * (ortho_range() * 0.5) : after.origin + after.dir * (distance / dot(after.dir, forward()));
     target = target + (p_before - p_after);
 }
 

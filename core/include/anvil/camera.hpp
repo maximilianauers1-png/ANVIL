@@ -35,6 +35,9 @@ struct Camera {
     /// for perspective.
     Mat4 projection() const;
     double near_plane() const;
+    /// Half depth of the orthographic slab (mm): scales with the view so float
+    /// depth keeps ~micrometre resolution (float eps * 2 * range).
+    double ortho_range() const;
 
     /// World point -> pixel (x right, y down) and view depth (distance along forward).
     bool project(const Vec3& world, double& px, double& py, double* depth = nullptr) const;

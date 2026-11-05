@@ -38,8 +38,6 @@ class Bvh {
         std::uint32_t count = 0;  // leaf: number of triangles; inner: 0
         std::uint32_t right = 0;  // inner: right child
     };
-    std::uint32_t build(std::uint32_t lo, std::uint32_t hi, std::vector<Vec3>& centroids,
-                        std::vector<Box3>& boxes);
     const Mesh* mesh_ = nullptr;
     std::vector<Node> nodes_;
     std::vector<std::uint32_t> order_;

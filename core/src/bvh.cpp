@@ -1,5 +1,7 @@
 #include "anvil/bvh.hpp"
 
+#include "anvil/sort.hpp"
+
 #include <algorithm>
 #include <numeric>
 
@@ -9,52 +11,99 @@ namespace {
 constexpr std::uint32_t kLeafSize = 4;
 }
 
+namespace {
+// Spreads the lower 10 bits of x to every third bit (Morton code helper).
+std::uint32_t spread3(std::uint32_t x) {
+    x &= 0x3ff;
+    x = (x | (x << 16)) & 0x030000ff;
+    x = (x | (x << 8)) & 0x0300f00f;
+    x = (x | (x << 4)) & 0x030c30c3;
+    x = (x | (x << 2)) & 0x09249249;
+    return x;
+}
+}  // namespace
+
+// Linear BVH (Karras 2012 style, top-down on sorted Morton codes): centroids are
+// quantized to a 1024^3 grid, radix-sorted by their 30-bit Morton code, and
+// split at the highest differing code bit. Build is O(n) after the sort; boxes
+// are filled bottom-up.
 Bvh::Bvh(const Mesh& m) : mesh_(&m) {
     const auto n = static_cast<std::uint32_t>(m.F.size());
     if (n == 0) return;
     std::vector<Vec3> c(n);
-    std::vector<Box3> b(n);
+    Box3 cb;
     for (std::uint32_t i = 0; i < n; ++i) {
         const auto& t = m.F[i];
-        b[i].add(m.V[t[0]]);
-        b[i].add(m.V[t[1]]);
-        b[i].add(m.V[t[2]]);
-        c[i] = b[i].center();
+        c[i] = (m.V[t[0]] + m.V[t[1]] + m.V[t[2]]) / 3.0;
+        cb.add(c[i]);
     }
+    Vec3 ext = cb.hi - cb.lo;
+    std::vector<std::uint64_t> codes(n);
     order_.resize(n);
-    std::iota(order_.begin(), order_.end(), 0u);
-    nodes_.reserve(2 * n / kLeafSize + 1);
-    build(0, n, c, b);
-}
-
-std::uint32_t Bvh::build(std::uint32_t lo, std::uint32_t hi, std::vector<Vec3>& c, std::vector<Box3>& b) {
-    const auto idx = static_cast<std::uint32_t>(nodes_.size());
+    for (std::uint32_t i = 0; i < n; ++i) {
+        auto q = [&](int a) {
+            double e = ext[a] > 0 ? (c[i][a] - cb.lo[a]) / ext[a] : 0.0;
+            return std::uint32_t(std::clamp(e * 1023.0, 0.0, 1023.0));
+        };
+        codes[i] = (spread3(q(0)) << 2) | (spread3(q(1)) << 1) | spread3(q(2));
+        order_[i] = i;
+    }
+    radix_sort_pairs(codes, order_, 30);
+    nodes_.reserve(2 * (n / kLeafSize + 1));
+    // iterative top-down split (explicit stack, no recursion depth issues)
+    struct Job { std::uint32_t node, lo, hi; };
+    std::vector<Job> stack;
     nodes_.push_back({});
-    Box3 box, cbox;
-    for (std::uint32_t i = lo; i < hi; ++i) {
-        box.add(b[order_[i]]);
-        cbox.add(c[order_[i]]);
+    stack.push_back({0, 0, n});
+    while (!stack.empty()) {
+        Job j = stack.back();
+        stack.pop_back();
+        if (j.hi - j.lo <= kLeafSize) {
+            nodes_[j.node].first = j.lo;
+            nodes_[j.node].count = j.hi - j.lo;
+            continue;
+        }
+        std::uint64_t a = codes[j.lo], b = codes[j.hi - 1];
+        std::uint32_t mid;
+        if (a == b) {
+            mid = j.lo + (j.hi - j.lo) / 2;  // identical codes: median split
+        } else {
+            int bit = 63;
+            while (!(((a ^ b) >> bit) & 1)) --bit;
+            // first index whose code has `bit` set (codes are sorted)
+            std::uint32_t lo = j.lo, hi = j.hi - 1;
+            while (lo < hi) {
+                std::uint32_t md = lo + (hi - lo) / 2;
+                if ((codes[md] >> bit) & 1) hi = md;
+                else lo = md + 1;
+            }
+            mid = lo;
+        }
+        auto left = static_cast<std::uint32_t>(nodes_.size());
+        nodes_.push_back({});
+        auto right = static_cast<std::uint32_t>(nodes_.size());
+        nodes_.push_back({});
+        nodes_[j.node].first = left;
+        nodes_[j.node].right = right;
+        nodes_[j.node].count = 0;
+        stack.push_back({right, mid, j.hi});
+        stack.push_back({left, j.lo, mid});
     }
-    nodes_[idx].box = box;
-    if (hi - lo <= kLeafSize) {
-        nodes_[idx].first = lo;
-        nodes_[idx].count = hi - lo;
-        return idx;
+    // bottom-up boxes: children always have larger indices than their parent
+    for (std::size_t k = nodes_.size(); k-- > 0;) {
+        Node& nd = nodes_[k];
+        Box3 bx;
+        if (nd.count) {
+            for (std::uint32_t i = nd.first; i < nd.first + nd.count; ++i) {
+                const auto& t = m.F[order_[i]];
+                bx.add(m.V[t[0]]), bx.add(m.V[t[1]]), bx.add(m.V[t[2]]);
+            }
+        } else {
+            bx = nodes_[nd.first].box;
+            bx.add(nodes_[nd.right].box);
+        }
+        nd.box = bx;
     }
-    Vec3 ext = cbox.hi - cbox.lo;
-    int axis = ext.x > ext.y ? (ext.x > ext.z ? 0 : 2) : (ext.y > ext.z ? 1 : 2);
-    std::uint32_t mid = lo + (hi - lo) / 2;
-    std::nth_element(order_.begin() + lo, order_.begin() + mid, order_.begin() + hi,
-                     [&](std::uint32_t a, std::uint32_t bb) {
-                         double ca = c[a][axis], cb = c[bb][axis];
-                         return ca < cb || (ca == cb && a < bb);  // deterministic tie-break
-                     });
-    std::uint32_t left = build(lo, mid, c, b);
-    std::uint32_t right = build(mid, hi, c, b);
-    nodes_[idx].first = left;
-    nodes_[idx].right = right;
-    nodes_[idx].count = 0;
-    return idx;
 }
 
 namespace {

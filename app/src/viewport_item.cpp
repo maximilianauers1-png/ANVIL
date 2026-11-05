@@ -1,0 +1,492 @@
+#include "viewport_item.hpp"
+
+#include <QFile>
+#include <QGuiApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QQuickWindow>
+#include <QRunnable>
+#include <QTimer>
+
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+
+namespace anvil {
+
+namespace {
+constexpr double kOrbitRadPerPx = 0.008;
+constexpr double kDragThresholdPx = 4.0;
+constexpr double kWheelStep = 0.85;     // zoom factor per wheel notch
+constexpr double kAnimMs = 180.0;       // camera transition
+constexpr double kCubeScale = 0.55;     // ViewCube: projected half-size of the unit cube (QML uses the same)
+constexpr std::size_t kFrameWindow = 600;
+
+class CleanupJob : public QRunnable {
+  public:
+    explicit CleanupJob(ViewportRenderer* r) : r_(r) {}
+    void run() override { delete r_; }
+
+  private:
+    ViewportRenderer* r_;
+};
+
+double percentile(std::vector<double> v, double p) {
+    if (v.empty()) return 0;
+    std::sort(v.begin(), v.end());
+    double idx = p * double(v.size() - 1);
+    std::size_t lo = std::size_t(std::floor(idx)), hi = std::min(v.size() - 1, lo + 1);
+    return v[lo] + (v[hi] - v[lo]) * (idx - double(lo));
+}
+}  // namespace
+
+ViewportItem::ViewportItem(QQuickItem* parent) : QQuickItem(parent) {
+    setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton | Qt::MiddleButton);
+    setAcceptHoverEvents(true);
+    setFlag(ItemAcceptsInputMethod, false);
+    connect(this, &QQuickItem::windowChanged, this, &ViewportItem::handleWindowChanged);
+    frame_ms_.assign(kFrameWindow, -1.0);
+    // status bar values (GPU memory, triangles, device) refresh even when idle
+    auto* t = new QTimer(this);
+    connect(t, &QTimer::timeout, this, &ViewportItem::statsChanged);
+    t->start(1000);
+    snap_engine_.settings.dpi_scale = 1.0;
+}
+
+ViewportItem::~ViewportItem() = default;
+
+double ViewportItem::dpr() const { return window() ? window()->effectiveDevicePixelRatio() : 1.0; }
+
+void ViewportItem::handleWindowChanged(QQuickWindow* w) {
+    if (!w) return;
+    connect(w, &QQuickWindow::beforeSynchronizing, this, &ViewportItem::sync, Qt::DirectConnection);
+    connect(w, &QQuickWindow::sceneGraphInvalidated, this, &ViewportItem::cleanup, Qt::DirectConnection);
+    connect(w, &QQuickWindow::frameSwapped, this, &ViewportItem::frameSwapped, Qt::QueuedConnection);
+    snap_engine_.settings.dpi_scale = w->effectiveDevicePixelRatio();
+}
+
+void ViewportItem::sync() {
+    // Render thread; the GUI thread is blocked, so reading members is safe.
+    if (!renderer_) {
+        renderer_ = new ViewportRenderer(window(), stats_);
+        auto* r = renderer_;
+        connect(window(), &QQuickWindow::beforeRendering, window(), [r] { r->before_rendering(); }, Qt::DirectConnection);
+        connect(window(), &QQuickWindow::beforeRenderPassRecording, window(), [r] { r->before_render_pass(); },
+                Qt::DirectConnection);
+    }
+    FrameInput in;
+    in.cam = cam_;
+    QRectF r = mapRectToScene(boundingRect());
+    const double k = dpr();
+    in.rect_px = QRectF(std::round(r.x() * k), std::round(r.y() * k), std::round(r.width() * k), std::round(r.height() * k));
+    in.cam.width = in.rect_px.width();
+    in.cam.height = in.rect_px.height();
+    in.bg[0] = float(bg_.redF()), in.bg[1] = float(bg_.greenF()), in.bg[2] = float(bg_.blueF());
+    in.grid[0] = float(grid_.redF()), in.grid[1] = float(grid_.greenF()), in.grid[2] = float(grid_.blueF());
+    in.edge[0] = float(edge_.redF()), in.edge[1] = float(edge_.greenF()), in.edge[2] = float(edge_.blueF());
+    in.edge[3] = float(edge_.alphaF());
+    in.show_grid = show_grid_;
+    // adaptive grid: minor lines at least ~10 px apart, steps of 10
+    double wpp = cam_.world_per_pixel(cam_.distance) * k / std::max(k, 1.0);
+    double step = 0.1;
+    while (step / std::max(wpp, 1e-12) < 10) step *= 10;
+    in.grid_step = step;
+    if (scene_) {
+        int idx = 0;
+        for (const auto& o : scene_->objects) {
+            ++idx;
+            if (!o.visible || !o.gpu) continue;
+            DrawItem item;
+            item.mesh = o.gpu;
+            QColor c = object_colors_.isEmpty() ? QColor(180, 184, 190)
+                                                : object_colors_[(idx - 1) % object_colors_.size()].value<QColor>();
+            if (!o.manifold) c = QColor(200, 90, 80);  // non-manifold imports stand out
+            item.color[0] = float(c.redF()), item.color[1] = float(c.greenF()), item.color[2] = float(c.blueF()), item.color[3] = 1;
+            bool sel = selection_.contains(QString::fromStdString(o.name));
+            item.highlight = sel ? 1.f : 0.f;
+            if (sel && tool_ == "move" && base_) item.extra_offset = snap_.point - *base_;
+            in.items.push_back(item);
+        }
+    }
+    if (ghost_) {
+        DrawItem g;
+        g.mesh = ghost_;
+        g.ghost = true;
+        g.edges = false;
+        g.color[0] = 0.35f, g.color[1] = 0.75f, g.color[2] = 1.0f, g.color[3] = 0.35f;
+        in.items.push_back(g);
+    }
+    renderer_->set_input(std::move(in));
+}
+
+void ViewportItem::cleanup() {
+    delete renderer_;  // render thread, context still valid
+    renderer_ = nullptr;
+}
+
+void ViewportItem::releaseResources() {
+    if (window() && renderer_) window()->scheduleRenderJob(new CleanupJob(renderer_), QQuickWindow::BeforeSynchronizingStage);
+    renderer_ = nullptr;
+}
+
+void ViewportItem::requestFrame() {
+    if (window()) window()->update();
+}
+
+void ViewportItem::geometryChange(const QRectF& n, const QRectF& o) {
+    QQuickItem::geometryChange(n, o);
+    cam_.width = n.width() * dpr();
+    cam_.height = n.height() * dpr();
+    emit cameraChanged();
+    requestFrame();
+}
+
+void ViewportItem::setScene(std::shared_ptr<const Scene> s) {
+    bool first = !scene_ && s && !s->bounds.empty();
+    scene_ = std::move(s);
+    if (first) frameAll();
+    snap_engine_.reset();
+    requestFrame();
+    // uploads finish asynchronously on the render side; keep frames coming briefly
+    QMetaObject::invokeMethod(this, [this] { requestFrame(); }, Qt::QueuedConnection);
+}
+
+void ViewportItem::setGhost(std::shared_ptr<const MeshCpu> g) {
+    ghost_ = std::move(g);
+    requestFrame();
+}
+
+void ViewportItem::setSelection(const QStringList& s) {
+    if (s == selection_) return;
+    selection_ = s;
+    emit selectionChanged();
+    requestFrame();
+}
+
+QString ViewportItem::snapKind() const {
+    switch (snap_.type) {
+        case SnapType::Vertex: case SnapType::Origin: return "point";
+        case SnapType::Midpoint: return "mid";
+        case SnapType::Center: case SnapType::Centroid: return "center";
+        case SnapType::Intersection: return "cross";
+        case SnapType::Tangent: case SnapType::Perpendicular: return "constraint";
+        case SnapType::Axis: return "axis";
+        case SnapType::Grid: return "grid";
+        default: return "free";
+    }
+}
+
+QString ViewportItem::toolHint() const {
+    if (tool_ == "move")
+        return base_ ? "Move: click the destination point (Esc cancels)" : "Move: click the base point (Esc cancels)";
+    return {};
+}
+
+QPointF ViewportItem::projectPoint(const Vec3& p) const {
+    Camera c = cam_;
+    c.width = width() * dpr();
+    c.height = height() * dpr();
+    double x = 0, y = 0;
+    c.project(p, x, y);
+    return {x / dpr(), y / dpr()};
+}
+
+QPointF ViewportItem::basePos() const {
+    if (!base_) return {};
+    double x, y;
+    if (!cam_.project(*base_, x, y)) return {};
+    return {x / dpr(), y / dpr()};
+}
+
+QVector3D ViewportItem::camRight() const { Vec3 v = cam_.right(); return QVector3D(float(v.x), float(v.y), float(v.z)); }
+QVector3D ViewportItem::camUp() const { Vec3 v = cam_.up(); return QVector3D(float(v.x), float(v.y), float(v.z)); }
+QVector3D ViewportItem::camForward() const { Vec3 v = cam_.forward(); return QVector3D(float(v.x), float(v.y), float(v.z)); }
+
+QVariantList ViewportItem::radialPath() const {
+    QVariantList l;
+    for (int i : radial_.path()) l << i;
+    return l;
+}
+
+void ViewportItem::updateSnap(QPointF pos) {
+    if (!scene_) {
+        snap_visible_ = false;
+        emit snapChanged();
+        return;
+    }
+    SnapScene sc;
+    for (const auto& o : scene_->objects)
+        if (o.visible && o.snap) sc.objects.push_back(o.snap);
+    SnapQuery q;
+    q.cam = cam_;
+    q.cam.width = width() * dpr();
+    q.cam.height = height() * dpr();
+    q.mx = pos.x() * dpr();
+    q.my = pos.y() * dpr();
+    q.disabled = QGuiApplication::queryKeyboardModifiers() & Qt::AltModifier;
+    if (tool_ == "move" && base_) {
+        q.base = base_;
+        if (!selection_.isEmpty()) q.ignore_object = selection_.front().toStdString();
+    }
+    snap_ = snap_engine_.update(sc, q);
+    snap_visible_ = snap_.type != SnapType::None;
+    emit snapChanged();
+    if (tool_ == "move" && base_) requestFrame();
+}
+
+// ------------------------------------------------------------------ input
+void ViewportItem::mousePressEvent(QMouseEvent* e) {
+    forceActiveFocus();
+    press_pos_ = last_pos_ = e->position();
+    drag_button_ = e->button();
+    dragging_ = false;
+    if (e->button() == Qt::RightButton) {
+        hover_pos_ = e->position();
+        updateSnap(hover_pos_);
+        radial_by_mouse_ = true;
+        radialBegin(selection_.isEmpty() ? "empty" : "selection");
+    }
+    e->accept();
+}
+
+void ViewportItem::mouseMoveEvent(QMouseEvent* e) {
+    QPointF p = e->position();
+    if (drag_button_ == Qt::RightButton && radial_.active()) {
+        hover_pos_ = p;
+        if (radial_.move(p.x(), p.y())) emit radialChanged();
+        return;
+    }
+    if (!dragging_ && QLineF(p, press_pos_).length() > kDragThresholdPx) dragging_ = true;
+    if (dragging_) {
+        QPointF delta = p - last_pos_;
+        bool pan = drag_button_ == Qt::MiddleButton ||
+                   (drag_button_ == Qt::LeftButton && (e->modifiers() & Qt::ControlModifier));
+        if (pan) cam_.pan_pixels(delta.x() * dpr(), delta.y() * dpr());
+        else cam_.orbit(-delta.x() * kOrbitRadPerPx, delta.y() * kOrbitRadPerPx);
+        animating_ = false;
+        emit cameraChanged();
+        requestFrame();
+    }
+    last_pos_ = p;
+}
+
+void ViewportItem::mouseReleaseEvent(QMouseEvent* e) {
+    if (e->button() == Qt::RightButton && radial_by_mouse_) {
+        hover_pos_ = e->position();
+        radial_by_mouse_ = false;
+        radialEnd();
+        drag_button_ = Qt::NoButton;
+        return;
+    }
+    if (!dragging_ && e->button() == Qt::LeftButton) {
+        updateSnap(e->position());
+        if (tool_ == "move") {
+            if (!base_) {
+                base_ = snap_.point;
+                emit toolChanged();
+            } else if (!selection_.isEmpty()) {
+                Vec3 delta = snap_.point - *base_;
+                emit moveRequested(selection_.front(), delta.x, delta.y, delta.z);
+                cancelTool();
+            }
+        } else {
+            bool add = e->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier);
+            emit picked(QString::fromStdString(snap_.object), add);
+        }
+    }
+    dragging_ = false;
+    drag_button_ = Qt::NoButton;
+}
+
+void ViewportItem::mouseDoubleClickEvent(QMouseEvent* e) {
+    if (e->button() == Qt::LeftButton && snap_.object.empty()) frameAll();
+}
+
+void ViewportItem::hoverMoveEvent(QHoverEvent* e) {
+    hover_pos_ = e->position();
+    if (radial_.active()) {
+        if (radial_.move(hover_pos_.x(), hover_pos_.y())) emit radialChanged();
+        return;
+    }
+    updateSnap(hover_pos_);
+}
+
+void ViewportItem::wheelEvent(QWheelEvent* e) {
+    double notches = e->angleDelta().y() / 120.0;
+    if (notches == 0) return;
+    QPointF p = e->position();
+    cam_.width = width() * dpr();
+    cam_.height = height() * dpr();
+    cam_.zoom_at(std::pow(kWheelStep, notches), p.x() * dpr(), p.y() * dpr());
+    emit cameraChanged();
+    requestFrame();
+    updateSnap(p);
+}
+
+// ------------------------------------------------------------------ radial
+void ViewportItem::radialBegin(QString context) {
+    if (!radial_rings_) return;
+    radial_context_ = context;
+    radial_point_ = snapPoint();
+    radial_point_exact_ = snap_visible_ ? snap_.point : Vec3{};
+    radial_.begin(hover_pos_.x(), hover_pos_.y(), [this](const std::vector<int>& path) { return radial_rings_(path); });
+    emit radialChanged();
+}
+
+void ViewportItem::radialEnd() {
+    if (!radial_.active()) return;
+    auto sel = radial_.end(hover_pos_.x(), hover_pos_.y());
+    emit radialChanged();
+    if (sel) {
+        QVariantList path;
+        for (int i : *sel) path << i;
+        emit radialSelected(path, radial_context_, radial_point_);
+    }
+}
+
+void ViewportItem::radialCancel() {
+    radial_.cancel();
+    emit radialChanged();
+}
+
+// ------------------------------------------------------------------ tools / camera
+void ViewportItem::startMoveTool() {
+    if (selection_.isEmpty()) return;
+    tool_ = "move";
+    base_.reset();
+    emit toolChanged();
+}
+
+void ViewportItem::cancelTool() {
+    tool_ = "select";
+    base_.reset();
+    emit toolChanged();
+    requestFrame();
+}
+
+void ViewportItem::animateTo(double yaw, double pitch) {
+    double dy = std::remainder(yaw - cam_.yaw, 2 * std::numbers::pi);  // shortest way round
+    anim_from_[0] = cam_.yaw, anim_from_[1] = cam_.pitch;
+    anim_to_[0] = cam_.yaw + dy, anim_to_[1] = pitch;
+    animating_ = true;
+    anim_clock_.start();
+    requestFrame();
+}
+
+void ViewportItem::viewDirection(double x, double y, double z) {
+    Camera c = cam_;
+    c.look_from({x, y, z});
+    animateTo(c.yaw, c.pitch);
+}
+
+void ViewportItem::view(const QString& n) {
+    if (n == "top") viewDirection(0, 0, 1);
+    else if (n == "bottom") viewDirection(0, 0, -1);
+    else if (n == "front") viewDirection(0, -1, 0);
+    else if (n == "back") viewDirection(0, 1, 0);
+    else if (n == "left") viewDirection(-1, 0, 0);
+    else if (n == "right") viewDirection(1, 0, 0);
+    else if (n == "iso") viewDirection(1, -1, 1);
+    else if (n == "frame") frameAll();
+    else if (n == "ortho" || n == "perspective") {
+        cam_.ortho = n == "ortho";
+        emit cameraChanged();
+        requestFrame();
+    }
+}
+
+QVector3D ViewportItem::cubeDirection(double u, double v) const {
+    // The widget shows an orthographic projection of [-1,1]^3 with scale kCubeScale.
+    Vec3 r = cam_.right(), up = cam_.up(), f = cam_.forward();
+    Vec3 o = r * (u / kCubeScale) + up * (v / kCubeScale) - f * 10.0;
+    double t0 = -INFINITY, t1 = INFINITY;
+    for (int a = 0; a < 3; ++a) {
+        if (std::abs(f[a]) < 1e-12) {
+            if (std::abs(o[a]) > 1) return {};
+            continue;
+        }
+        double ta = (-1 - o[a]) / f[a], tb = (1 - o[a]) / f[a];
+        t0 = std::max(t0, std::min(ta, tb));
+        t1 = std::min(t1, std::max(ta, tb));
+    }
+    if (t0 > t1) return {};
+    Vec3 hit = o + f * t0;
+    auto dir3 = classify_cube_hit(hit);
+    return QVector3D(float(dir3[0]), float(dir3[1]), float(dir3[2]));
+}
+
+void ViewportItem::frameAll() {
+    Box3 b;
+    if (scene_) b = scene_->bounds;
+    if (b.empty()) b.add(Vec3{-25, -25, 0}), b.add(Vec3{25, 25, 10});
+    cam_.frame(b);
+    emit cameraChanged();
+    requestFrame();
+}
+
+void ViewportItem::frameSwapped() {
+    const double dt = frame_clock_.isValid() ? frame_clock_.nsecsElapsed() / 1e6 : -1;
+    frame_clock_.restart();
+    // Interactive statistics only count consecutive frames (idle gaps are not
+    // frame times); during a benchmark every frame is requested back-to-back,
+    // so every interval counts, however long.
+    if (dt > 0 && bench_left_ > 0) bench_ms_.push_back(dt), bench_gpu_.push_back(stats_->gpu_ms);
+    if (dt > 0 && dt < 250) frame_ms_[frame_idx_++ % kFrameWindow] = dt;
+    if (animating_) {
+        double t = std::min(1.0, anim_clock_.elapsed() / kAnimMs);
+        double s = t * t * (3 - 2 * t);  // smoothstep
+        cam_.yaw = anim_from_[0] + (anim_to_[0] - anim_from_[0]) * s;
+        cam_.pitch = anim_from_[1] + (anim_to_[1] - anim_from_[1]) * s;
+        if (t >= 1) animating_ = false;
+        emit cameraChanged();
+        requestFrame();
+    }
+    if (bench_left_ > 0) {
+        --bench_left_;
+        double done = double(bench_total_ - bench_left_) / bench_total_;
+        cam_.yaw = bench_yaw0_ + 2 * std::numbers::pi * done;
+        requestFrame();
+        if (bench_left_ == 0) {
+            QJsonObject j;
+            const auto& v = bench_ms_;
+            j["frames"] = int(v.size());
+            j["cpu_present_interval_ms"] = QJsonObject{{"p50", percentile(v, 0.5)}, {"p95", percentile(v, 0.95)},
+                                                       {"p99", percentile(v, 0.99)},
+                                                       {"max", v.empty() ? 0 : *std::max_element(v.begin(), v.end())}};
+            j["gpu_ms"] = QJsonObject{{"p50", percentile(bench_gpu_, 0.5)}, {"p99", percentile(bench_gpu_, 0.99)}};
+            j["triangles"] = qint64(stats_->triangles.load());
+            j["device"] = QString::fromStdString(stats_->device_name);
+            j["msaa"] = stats_->msaa;
+            j["viewport_px"] = QJsonArray{width() * dpr(), height() * dpr()};
+            j["target_p99_ms"] = 16.7;
+            QString json = QString::fromUtf8(QJsonDocument(j).toJson());
+            if (!bench_out_.isEmpty()) {
+                QFile f(bench_out_);
+                if (f.open(QIODevice::WriteOnly)) f.write(json.toUtf8());
+            }
+            emit benchmarkFinished(json);
+        }
+    }
+    if (++stats_tick_ % 30 == 0) {
+        std::vector<double> v;
+        for (double x : frame_ms_)
+            if (x > 0) v.push_back(x);
+        p50_ = percentile(v, 0.5);
+        p99_ = percentile(v, 0.99);
+        emit statsChanged();
+    }
+}
+
+void ViewportItem::runBenchmark(int frames, const QString& outPath) {
+    frameAll();
+    bench_total_ = bench_left_ = std::max(frames, 10);
+    bench_out_ = outPath;
+    bench_ms_.clear();
+    bench_gpu_.clear();
+    bench_yaw0_ = cam_.yaw;
+    frame_clock_.invalidate();
+    requestFrame();
+}
+
+}  // namespace anvil

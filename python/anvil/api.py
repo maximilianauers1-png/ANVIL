@@ -23,7 +23,7 @@ __all__ = [
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
     "subtract", "union", "intersect", "duplicate", "clear", "export_stl", "import_stl", "import_mesh",
-    "check", "info", "save", "load", "view", "select", "set_unit", "GeometryError",
+    "check", "info", "save", "load", "view", "theme", "select", "set_unit", "GeometryError",
 ]
 
 GeometryError = _a.GeometryError
@@ -411,13 +411,27 @@ def load(path: str):
 
 # --------------------------------------------------------------------------- UI requests
 
-def view(name: str = "iso"):
+def view(name: str = "iso", direction=None):
     """Camera: 'top', 'bottom', 'front', 'back', 'left', 'right', 'iso',
-    'frame' (fit all), 'ortho', 'perspective'."""
+    'frame' (fit all), 'ortho', 'perspective'; or direction=(x, y, z): look
+    from that direction towards the target (the 26 ViewCube directions)."""
+    if direction is not None:
+        d = [float(c) for c in direction]
+        if len(d) != 3 or not any(d):
+            raise ValueError("view(direction=...) needs a non-zero (x, y, z)")
+        _a.ui_request(_json.dumps({"request": "view", "direction": d}))
+        return
     valid = {"top", "bottom", "front", "back", "left", "right", "iso", "frame", "ortho", "perspective"}
     if name not in valid:
         raise ValueError(f"view({name!r}): expected one of {', '.join(sorted(valid))}")
     _a.ui_request(_json.dumps({"request": "view", "name": name}))
+
+
+def theme(name: str):
+    """UI theme: 'dark' or 'light' (applied live)."""
+    if name not in ("dark", "light"):
+        raise ValueError("theme(): 'dark' or 'light'")
+    _a.ui_request(_json.dumps({"request": "theme", "name": name}))
 
 
 def select(*names):

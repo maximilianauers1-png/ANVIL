@@ -450,7 +450,7 @@ TEST_CASE("camera project/ray are consistent", "[camera]") {
         for (double px : {0.0, 333.0, 960.0, 1919.0})
             for (double py : {0.0, 540.0, 1079.0}) {
                 Ray r = c.ray(px, py);
-                Vec3 p = r.origin + r.dir * (ortho ? 5e5 + 50 : 120.0);
+                Vec3 p = r.origin + r.dir * (ortho ? c.ortho_range() * 0.5 + 50 : 120.0);
                 double x, y;
                 REQUIRE(c.project(p, x, y));
                 REQUIRE(x == Approx(px).margin(1e-6));

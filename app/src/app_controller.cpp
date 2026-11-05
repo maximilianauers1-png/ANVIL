@@ -1,0 +1,844 @@
+#include "app_controller.hpp"
+
+#include <QDateTime>
+#include <QDirIterator>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QStandardPaths>
+
+#include <cmath>
+#include <fstream>
+#include <numbers>
+#include <thread>
+
+#include "anvil/expr.hpp"
+#include "anvil/fsutil.hpp"
+#include "anvil/journal.hpp"
+#include "anvil/version.hpp"
+#include "viewport_item.hpp"
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <signal.h>
+#include <unistd.h>
+#endif
+
+namespace anvil {
+
+namespace {
+constexpr int kConsoleMaxChars = 200000;
+
+QString pyStr(const QString& s) {
+    QString o = "\"";
+    for (QChar c : s) {
+        if (c == '\\' || c == '"') o += '\\';
+        if (c == '\n') {
+            o += "\\n";
+            continue;
+        }
+        o += c;
+    }
+    return o + "\"";
+}
+
+QString reprDouble(double v) { return QString::fromStdString(repr_double(v)); }
+
+bool pidAlive(qint64 pid) {
+#ifdef _WIN32
+    HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, DWORD(pid));
+    if (!h) return false;
+    bool alive = WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
+    CloseHandle(h);
+    return alive;
+#else
+    return ::kill(pid_t(pid), 0) == 0;
+#endif
+}
+
+qint64 currentPid() {
+#ifdef _WIN32
+    return qint64(GetCurrentProcessId());
+#else
+    return qint64(::getpid());
+#endif
+}
+}  // namespace
+
+AppController::AppController(SessionOptions opt, std::filesystem::path session_dir, QObject* parent)
+    : QObject(parent), opt_(std::move(opt)), session_dir_(std::move(session_dir)) {
+    settings_ = Settings::load();
+    if (auto u = parse_length_unit(settings_.unit.toStdString())) unit_ = *u;
+    theme_ = settings_.theme;
+    opt_.display_chord_mm = settings_.chord_mm;
+    std::filesystem::create_directories(session_dir_);
+    {
+        std::ofstream lock(session_dir_ / "lock");
+        lock << currentPid();
+    }
+    findRecovery();  // before our own journal exists in the sessions folder scan
+    opt_.journal_path = session_dir_ / "journal.py";
+    session_ = std::make_unique<Session>(opt_);
+    session_->document().set_undo_limit(std::size_t(std::max(10, settings_.undo_limit)));
+    session_->ui_handler = [this](const std::string& json) {
+        QString j = QString::fromStdString(json);
+        QMetaObject::invokeMethod(this, [this, j] { handleUiRequest(j); }, Qt::QueuedConnection);
+    };
+    session_->document().add_listener([this](const DocState&) {
+        QMetaObject::invokeMethod(this, [this] { onDocumentChanged(); }, Qt::QueuedConnection);
+    });
+    builder_ = std::make_unique<SceneBuilder>(
+        session_->cache(),
+        [this](std::shared_ptr<const Scene> s) {
+            QMetaObject::invokeMethod(this, [this, s] {
+                if (viewport_) viewport_->setScene(s);
+                // merge evaluation results into the object list
+                QVariantList objs;
+                qulonglong tris = 0;
+                for (const auto& o : s->objects) {
+                    QVariantMap m;
+                    m["name"] = QString::fromStdString(o.name);
+                    m["visible"] = o.visible;
+                    m["triangles"] = qulonglong(o.triangles);
+                    m["volume"] = o.volume;
+                    m["manifold"] = o.manifold;
+                    m["error"] = QString::fromStdString(o.error);
+                    if (o.visible) tris += o.triangles;
+                    objs << m;
+                }
+                // keep kind information from the document
+                auto st = session_->document().state();
+                for (int i = 0; i < objs.size(); ++i) {
+                    QVariantMap m = objs[i].toMap();
+                    if (const Object* ob = st->find(m["name"].toString().toStdString()))
+                        m["kind"] = QString(node_kind_name(ob->root->kind));
+                    objs[i] = m;
+                }
+                objects_ = objs;
+                scene_tris_ = tris;
+                emit documentChanged();
+            }, Qt::QueuedConnection);
+        },
+        [this](std::shared_ptr<const MeshCpu> g) {
+            QMetaObject::invokeMethod(this, [this, g] {
+                if (viewport_) viewport_->setGhost(g);
+            }, Qt::QueuedConnection);
+        });
+    loadCommands();
+    radial_layout_ = settings_.radial_layout;
+    connect(&autosave_timer_, &QTimer::timeout, this, &AppController::autosave);
+    autosave_timer_.start(std::max(5, settings_.autosave_seconds) * 1000);
+    detectHardware();
+    refreshModels();
+}
+
+AppController::~AppController() {
+    builder_.reset();
+    if (session_) {
+        session_->close_clean();
+        session_.reset();  // joins the Python thread after the close marker is written
+    }
+    // A cleanly closed session needs no recovery: remove its folder.
+    std::error_code ec;
+    std::filesystem::remove_all(session_dir_, ec);
+    settings_.save();
+}
+
+void AppController::attachViewport(ViewportItem* v) {
+    viewport_ = v;
+    v->setRadialProvider([this](const std::vector<int>& path) {
+        QVariantList p;
+        for (int i : path) p << i;
+        std::vector<RadialItem> ring;
+        for (const auto& it : radialItems(p, viewport_->radialContext())) {
+            QVariantMap m = it.toMap();
+            ring.push_back({m["enabled"].toBool(), m["submenu"].toBool()});
+        }
+        return ring;
+    });
+    connect(v, &ViewportItem::picked, this, &AppController::pick);
+    connect(v, &ViewportItem::radialSelected, this, &AppController::radialPick);
+    connect(v, &ViewportItem::moveRequested, this, [this](const QString& name, double dx, double dy, double dz) {
+        QStringList a;
+        if (dx != 0) a << "x=" + reprDouble(dx) + "*mm";
+        if (dy != 0) a << "y=" + reprDouble(dy) + "*mm";
+        if (dz != 0) a << "z=" + reprDouble(dz) + "*mm";
+        if (a.isEmpty()) return;
+        execute("move(" + pyStr(name) + ", " + a.join(", ") + ")", "ui");
+    });
+    connect(this, &AppController::viewRequested, v, [v](const QString& name, const QVector3D& d) {
+        if (name.isEmpty()) v->viewDirection(d.x(), d.y(), d.z());
+        else v->view(name);
+    });
+    builder_->request(session_->document().state(), session_->document().revision(), settings_.chord_mm);
+}
+
+QString AppController::version() const { return QString(version_string()); }
+
+void AppController::setStartupMs(double ms) {
+    startup_ms_ = ms;
+    emit startupMeasured();
+}
+
+void AppController::setSelection(const QStringList& s) {
+    if (s == selection_) return;
+    selection_ = s;
+    if (viewport_) viewport_->setSelection(s);
+    emit selectionChanged();
+}
+
+void AppController::setMode(const QString& m) {
+    if (m == mode_) return;
+    mode_ = m;
+    emit modeChanged();
+}
+
+void AppController::pick(const QString& name, bool additive) {
+    QStringList s = additive ? selection_ : QStringList();
+    if (!name.isEmpty()) {
+        if (additive && s.contains(name)) s.removeAll(name);
+        else if (!s.contains(name)) s << name;
+    }
+    setSelection(s);
+}
+
+// ------------------------------------------------------------------ document sync
+void AppController::onDocumentChanged() {
+    refreshModels();
+    builder_->request(session_->document().state(), session_->document().revision(), settings_.chord_mm);
+}
+
+void AppController::refreshModels() {
+    auto st = session_->document().state();
+    QVariantList hist;
+    for (const auto& h : session_->document().history()) {
+        QVariantMap m;
+        QString label = QString::fromStdString(h.label);
+        m["source"] = label;
+        m["label"] = label.section('\n', 0, 0).left(120);
+        m["origin"] = QString::fromStdString(h.origin);
+        hist << m;
+    }
+    history_ = hist;
+    history_pos_ = int(session_->document().history_position());
+    can_undo_ = session_->document().can_undo();
+    can_redo_ = session_->document().can_redo();
+    QVariantList vars;
+    auto res = st->resolver();
+    for (const auto& [name, p] : st->vars) {
+        QVariantMap m;
+        m["name"] = QString::fromStdString(name);
+        m["expr"] = QString::fromStdString(p.expr);
+        Dim d = st->var_dims.count(name) ? st->var_dims.at(name) : dims::kLength;
+        double v = res(name)->value;
+        m["display"] = d == dims::kLength ? formatLength(v)
+                       : d == dims::kAngle ? QString::number(v * 180 / std::numbers::pi, 'g', 8) + " deg"
+                                           : QString::number(v, 'g', 10);
+        vars << m;
+    }
+    variables_ = vars;
+    // drop selected names that no longer exist
+    QStringList sel;
+    for (const auto& n : selection_)
+        if (st->find(n.toStdString())) sel << n;
+    setSelection(sel);
+    // object list (geometry info arrives with the next scene)
+    QVariantList objs;
+    for (const auto& o : st->objects) {
+        QVariantMap m;
+        m["name"] = QString::fromStdString(o->name);
+        m["visible"] = o->visible;
+        m["kind"] = QString(node_kind_name(o->root->kind));
+        for (const auto& old : objects_)
+            if (old.toMap()["name"] == m["name"]) {
+                for (const char* k : {"triangles", "volume", "manifold", "error"}) m[k] = old.toMap()[k];
+            }
+        objs << m;
+    }
+    objects_ = objs;
+    emit documentChanged();
+}
+
+// ------------------------------------------------------------------ commands
+void AppController::appendConsole(const QString& text) {
+    if (text.isEmpty()) return;
+    console_ += text;
+    if (!console_.endsWith('\n')) console_ += '\n';
+    if (console_.size() > kConsoleMaxChars) console_ = console_.right(kConsoleMaxChars);
+    emit consoleChanged();
+}
+
+void AppController::execute(const QString& source, const QString& origin) {
+    if (source.trimmed().isEmpty()) return;
+    ++pending_;
+    emit busyChanged();
+    appendConsole(">>> " + QString(source).replace("\n", "\n... "));
+    session_->submit_async(source.toStdString(), origin.toStdString(), ExecMode::Command,
+                           [this, origin](ExecResult r) {
+                               QMetaObject::invokeMethod(this, [this, r, origin] {
+                                   --pending_;
+                                   emit busyChanged();
+                                   appendConsole(QString::fromStdString(r.output));
+                                   last_error_ = r.ok ? QString() : QString::fromStdString(r.error);
+                                   if (!r.ok) appendConsole("error: " + last_error_);
+                                   emit lastErrorChanged();
+                                   emit commandFinished(r.ok, last_error_, origin);
+                               }, Qt::QueuedConnection);
+                           });
+}
+
+void AppController::loadCommands() {
+    ExecResult r = session_->run("commands", "ui", ExecMode::Query);
+    if (!r.ok) {
+        appendConsole("error: cannot load the command registry: " + QString::fromStdString(r.error));
+        return;
+    }
+    QJsonObject o = QJsonDocument::fromJson(QByteArray::fromStdString(r.json)).object();
+    commands_.clear();
+    fuzzy_.clear();
+    command_meta_.clear();
+    for (const auto& c : o["commands"].toArray()) {
+        QVariantMap m = c.toObject().toVariantMap();
+        commands_ << m;
+        command_meta_[m["id"].toString()] = m;
+        fuzzy_.push_back({m["id"].toString().toStdString(),
+                          (m["label"].toString() + " " + m["category"].toString() + " " + m["keywords"].toString())
+                              .toStdString(),
+                          0});
+    }
+    QVariantMap layout = o["radial"].toObject().toVariantMap();
+    if (settings_.radial_layout.isEmpty()) radial_layout_ = layout;
+    default_layout_ = layout;
+    ExecResult pl = session_->run("plugins", "ui", ExecMode::Query);
+    for (const auto& p : QJsonDocument::fromJson(QByteArray::fromStdString(pl.json)).array()) {
+        QJsonObject po = p.toObject();
+        appendConsole(QString("plugin %1 %2: %3")
+                          .arg(po["name"].toString(), po["version"].toString(),
+                               po["loaded"].toBool() ? "loaded" : "skipped (" + po["error"].toString() + ")"));
+    }
+    emit commandsChanged();
+}
+
+QString AppController::commandLabel(const QString& id) const {
+    return command_meta_.contains(id) ? command_meta_[id]["label"].toString() : id;
+}
+
+void AppController::runCommand(const QString& id, const QVector3D& point, bool havePoint) {
+    if (!command_meta_.contains(id)) {
+        appendConsole("error: unknown command '" + id + "'");
+        return;
+    }
+    const QVariantMap& meta = command_meta_[id];
+    int n = selection_.size();
+    if (n < meta["min"].toInt() || n > meta["max"].toInt()) {
+        last_error_ = QString("'%1' needs %2 selected object(s)")
+                          .arg(meta["label"].toString(),
+                               meta["min"].toInt() == meta["max"].toInt()
+                                   ? meta["min"].toString()
+                                   : QString("at least %1").arg(meta["min"].toInt()));
+        emit lastErrorChanged();
+        return;
+    }
+    for (auto& e : fuzzy_)
+        if (e.id == id.toStdString()) e.usage += 1;
+    QString ui = meta["ui"].toString();
+    if (ui == "move_tool") {
+        if (viewport_) viewport_->startMoveTool();
+        return;
+    }
+    if (!ui.isEmpty()) {
+        emit uiToolRequested(ui);
+        return;
+    }
+    QJsonObject ctx;
+    ctx["selection"] = QJsonArray::fromStringList(selection_);
+    if (havePoint) {
+        // QVector3D is float: take the exact double point captured by the viewport
+        Vec3 p = viewport_ ? viewport_->radialPointExact() : Vec3{point.x(), point.y(), point.z()};
+        ctx["point"] = QJsonArray{p.x, p.y, p.z};
+    }
+    QJsonObject req{{"q", "build"}, {"id", id}, {"ctx", ctx}};
+    std::string q = QJsonDocument(req).toJson(QJsonDocument::Compact).toStdString();
+    session_->submit_async(q, "ui", ExecMode::Query, [this](ExecResult r) {
+        QMetaObject::invokeMethod(this, [this, r] {
+            if (!r.ok) {
+                last_error_ = QString::fromStdString(r.error);
+                emit lastErrorChanged();
+                return;
+            }
+            QString src = QJsonDocument::fromJson(QByteArray::fromStdString(r.json)).object()["source"].toString();
+            if (!src.isEmpty()) execute(src, "ui");
+        }, Qt::QueuedConnection);
+    });
+}
+
+QVariantList AppController::radialItems(const QVariantList& path, const QString& context) const {
+    QVariantList ring = radial_layout_.value(mode_).toMap().value(context).toList();
+    if (ring.isEmpty()) ring = default_layout_.value(mode_).toMap().value(context).toList();
+    for (const auto& idx : path) {
+        int i = idx.toInt();
+        if (i < 0 || i >= ring.size()) return {};
+        ring = ring[i].toMap().value("items").toList();
+    }
+    QVariantList out;
+    int n = selection_.size();
+    for (int i = 0; i < 8; ++i) {
+        QVariantMap m;
+        if (i < ring.size()) {
+            QVariant slot = ring[i];
+            if (slot.typeId() == QMetaType::QVariantMap) {
+                QVariantMap sm = slot.toMap();
+                m["label"] = sm["submenu"].toString() + " ▸";
+                m["submenu"] = true;
+                m["enabled"] = true;
+                m["id"] = "";
+            } else if (!slot.toString().isEmpty() && command_meta_.contains(slot.toString())) {
+                const QVariantMap& meta = command_meta_[slot.toString()];
+                m["id"] = slot.toString();
+                m["label"] = meta["label"];
+                m["help"] = meta["help"];
+                m["submenu"] = false;
+                m["enabled"] = n >= meta["min"].toInt() && n <= meta["max"].toInt();
+            }
+        }
+        if (!m.contains("enabled")) m["enabled"] = false, m["submenu"] = false, m["label"] = "", m["id"] = "";
+        out << m;
+    }
+    return out;
+}
+
+void AppController::radialPick(const QVariantList& path, const QString& context, const QVector3D& point) {
+    if (path.isEmpty()) return;
+    QVariantList parent = path.mid(0, path.size() - 1);
+    QVariantList ring = radialItems(parent, context);
+    int i = path.last().toInt();
+    if (i < 0 || i >= ring.size()) return;
+    QString id = ring[i].toMap()["id"].toString();
+    if (!id.isEmpty()) runCommand(id, point, true);
+}
+
+void AppController::undo() { session_->undo(); }
+void AppController::redo() { session_->redo(); }
+void AppController::jumpToHistory(int position) {
+    int delta = position - history_pos_;
+    for (int i = 0; i < -delta; ++i) session_->undo();
+    for (int i = 0; i < delta; ++i) session_->redo();
+}
+
+// ------------------------------------------------------------------ properties
+QString AppController::formatLength(double mm) const { return QString::fromStdString(format_length(mm, unit_)); }
+
+QString AppController::formatPoint(const QVector3D& p) const {
+    const double k = unit_info(unit_).mm_per_unit;
+    auto f = [&](float v) { return QString::number(double(v) / k, 'g', 6); };
+    return QString("x %1  y %2  z %3 %4").arg(f(p.x()), f(p.y()), f(p.z()), unit_info(unit_).symbol);
+}
+
+void AppController::requestViewDirection(const QVector3D& d) {
+    if (d.isNull()) return;
+    execute(QString("view(direction=(%1, %2, %3))").arg(d.x()).arg(d.y()).arg(d.z()), "ui");
+}
+
+QVariantList AppController::nodeTree(const QString& name) const {
+    QVariantList rows;
+    auto st = session_->document().state();
+    const Object* o = st->find(name.toStdString());
+    if (!o) return rows;
+    std::function<void(const NodePtr&, const QString&, int)> walk = [&](const NodePtr& n, const QString& path, int depth) {
+        QVariantMap row;
+        row["path"] = path;
+        row["depth"] = depth;
+        QString kind = node_kind_name(n->kind);
+        if (n->kind == NodeKind::Boolean)
+            kind = n->op == BoolOp::Union ? "Union" : n->op == BoolOp::Difference ? "Subtract" : "Intersect";
+        if (n->kind == NodeKind::ImportedMesh) kind = "Mesh  " + QString::fromStdString(n->source_path);
+        row["kind"] = kind;
+        QVariantList params;
+        for (const auto& spec : param_specs(n->kind)) {
+            auto it = n->params.find(spec.name);
+            if (it == n->params.end() && std::string(spec.name) != "d2") continue;
+            QVariantMap p;
+            p["key"] = QString(spec.name);
+            p["help"] = QString(spec.help);
+            p["dim"] = spec.dim == dims::kAngle ? "Angle" : "Length";
+            if (it == n->params.end()) {
+                p["text"] = "";
+                p["expr"] = "";
+            } else {
+                double v = it->second.value;
+                if (!it->second.expr.empty()) {
+                    try {
+                        v = resolve(it->second, st->resolver(), spec.dim, spec.name);
+                    } catch (...) {
+                    }
+                }
+                p["expr"] = QString::fromStdString(it->second.expr);
+                p["text"] = !it->second.expr.empty() ? QString::fromStdString(it->second.expr)
+                            : spec.dim == dims::kAngle   ? QString::number(v * 180 / std::numbers::pi, 'g', 10) + " deg"
+                                                         : formatLength(v);
+                p["value"] = spec.dim == dims::kAngle ? QString::number(v * 180 / std::numbers::pi, 'g', 8) + " deg"
+                                                      : formatLength(v);
+            }
+            params << p;
+        }
+        row["params"] = params;
+        rows << row;
+        for (const auto& c : n->child_names()) walk(n->child(c), path.isEmpty() ? QString::fromStdString(c) : path + "/" + QString::fromStdString(c), depth + 1);
+    };
+    walk(o->root, "", 0);
+    return rows;
+}
+
+QString AppController::paramLiteral(const QString& text, Dim dim, QString* error) const {
+    std::string t = text.trimmed().toStdString();
+    auto st = session_->document().state();
+    try {
+        auto ids = expr_identifiers(t);
+        if (!ids.empty()) {  // parametric: keep the expression, check it resolves now
+            RtQuantity q = eval_expr(t, st->resolver());
+            if (!(q.dim == dim)) throw ExprError("expected " + dim_name(dim) + ", got " + dim_name(q.dim), 0);
+            return pyStr(text.trimmed());
+        }
+        RtQuantity q = eval_expr(t);
+        if (q.dim.dimensionless()) {  // bare number: the display unit applies
+            if (dim == dims::kLength) return reprDouble(q.value * unit_info(unit_).mm_per_unit) + "*mm";
+            return reprDouble(q.value) + "*deg";
+        }
+        if (!(q.dim == dim)) throw ExprError("expected " + dim_name(dim) + ", got " + dim_name(q.dim), 0);
+        if (dim == dims::kLength) return reprDouble(q.value) + "*mm";
+        return reprDouble(q.value) + "*rad";
+    } catch (const std::exception& e) {
+        if (error) *error = QString::fromStdString(e.what());
+        return {};
+    }
+}
+
+QString AppController::validateField(const QString& text) const {
+    QString err;
+    paramLiteral(text, dims::kLength, &err);
+    return err;
+}
+
+void AppController::setParam(const QString& name, const QString& path, const QString& key, const QString& text) {
+    Dim dim = (key == "rx" || key == "ry" || key == "rz") ? dims::kAngle : dims::kLength;
+    QString err;
+    QString lit = paramLiteral(text, dim, &err);
+    if (lit.isEmpty()) {
+        last_error_ = key + ": " + err;
+        emit lastErrorChanged();
+        return;
+    }
+    QString src = "edit(" + pyStr(name) + (path.isEmpty() ? "" : ", " + pyStr(path)) + ", " + key + "=" + lit + ")";
+    execute(src, "ui");
+}
+
+void AppController::setVariable(const QString& name, const QString& text) {
+    QString err;
+    QString lit = paramLiteral(text, dims::kLength, &err);
+    if (lit.isEmpty()) {
+        last_error_ = name + ": " + err;
+        emit lastErrorChanged();
+        return;
+    }
+    execute("var(" + pyStr(name) + ", " + lit + ")", "ui");
+}
+
+void AppController::toggleVisible(const QString& name) {
+    auto st = session_->document().state();
+    const Object* o = st->find(name.toStdString());
+    if (!o) return;
+    execute(QString(o->visible ? "hide(" : "unhide(") + pyStr(name) + ")", "ui");
+}
+
+void AppController::renameObject(const QString& from, const QString& to) {
+    if (to.trimmed().isEmpty() || from == to) return;
+    execute("rename(" + pyStr(from) + ", " + pyStr(to.trimmed()) + ")", "ui");
+}
+
+// ------------------------------------------------------------------ command bar
+QVariantList AppController::fuzzy(const QString& query) const {
+    QVariantList out;
+    for (std::size_t i : fuzzy_rank(query.toStdString(), fuzzy_, 12)) {
+        QVariantMap m = command_meta_[QString::fromStdString(fuzzy_[i].id)];
+        int n = selection_.size();
+        m["enabled"] = n >= m["min"].toInt() && n <= m["max"].toInt();
+        out << m;
+    }
+    return out;
+}
+
+QVariantMap AppController::checkSyntax(const QString& source) {
+    ExecResult r = session_->run(source.toStdString(), "ui", ExecMode::Check);
+    return {{"ok", r.ok}, {"error", QString::fromStdString(r.error)}, {"line", r.error_line}, {"col", r.error_col}};
+}
+
+QVariantList AppController::complete(const QString& source) {
+    ExecResult r = session_->run(source.toStdString(), "ui", ExecMode::Complete);
+    QJsonObject o = QJsonDocument::fromJson(QByteArray::fromStdString(r.json)).object();
+    QVariantList l;
+    for (const auto& v : o["items"].toArray()) l << v.toString();
+    return l;
+}
+
+QString AppController::signature(const QString& source) {
+    QString name = source.section('(', 0, 0).trimmed();
+    name = name.section(QRegularExpression("[^A-Za-z0-9_.]"), -1);
+    if (name.isEmpty()) return {};
+    QJsonObject req{{"q", "signature"}, {"name", name}};
+    ExecResult r = session_->run(QJsonDocument(req).toJson(QJsonDocument::Compact).toStdString(), "ui", ExecMode::Query);
+    if (!r.ok) return {};
+    QJsonObject o = QJsonDocument::fromJson(QByteArray::fromStdString(r.json)).object();
+    return o["signature"].toString() + (o["doc"].toString().isEmpty() ? "" : "  -  " + o["doc"].toString());
+}
+
+void AppController::preview(const QString& source) {
+    const std::uint64_t seq = ++preview_seq_;
+    session_->submit_async(source.toStdString(), "preview", ExecMode::Preview, [this, seq](ExecResult r) {
+        QMetaObject::invokeMethod(this, [this, r, seq] {
+            if (seq != preview_seq_) return;  // a newer preview superseded this one
+            if (!r.ok && !r.error.empty()) emit previewError(QString::fromStdString(r.error));
+            else emit previewError({});
+            builder_->request_ghost(r.preview, session_->document().state(), settings_.chord_mm);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void AppController::clearPreview() {
+    ++preview_seq_;
+    builder_->request_ghost(nullptr, nullptr, settings_.chord_mm);
+}
+
+void AppController::requestUnit(const QString& s) { execute("set_unit(" + pyStr(s) + ")", "ui"); }
+void AppController::requestTheme(const QString& n) { execute("theme(" + pyStr(n) + ")", "ui"); }
+void AppController::requestView(const QString& n) {
+    if (n.startsWith("dir:")) {
+        QStringList c = n.mid(4).split(',');
+        if (c.size() == 3) execute(QString("view(direction=(%1, %2, %3))").arg(c[0], c[1], c[2]), "ui");
+        return;
+    }
+    execute("view(" + pyStr(n) + ")", "ui");
+}
+
+void AppController::handleUiRequest(const QString& json) {
+    QJsonObject o = QJsonDocument::fromJson(json.toUtf8()).object();
+    QString req = o["request"].toString();
+    if (req == "view") {
+        if (o.contains("direction")) {
+            QJsonArray d = o["direction"].toArray();
+            emit viewRequested({}, QVector3D(float(d[0].toDouble()), float(d[1].toDouble()), float(d[2].toDouble())));
+        } else {
+            emit viewRequested(o["name"].toString(), {});
+        }
+    } else if (req == "select") {
+        QStringList s;
+        for (const auto& v : o["names"].toArray()) s << v.toString();
+        setSelection(s);
+    } else if (req == "unit") {
+        if (auto u = parse_length_unit(o["unit"].toString().toStdString())) {
+            unit_ = *u;
+            settings_.unit = unit_info(unit_).symbol;
+            settings_.save();
+            refreshModels();
+            emit unitChanged();
+        }
+    } else if (req == "theme") {
+        theme_ = o["name"].toString();
+        settings_.theme = theme_;
+        settings_.save();
+        emit themeChanged();
+    }
+}
+
+// ------------------------------------------------------------------ files
+QString AppController::selectionExpr(const QStringList& names) const {
+    QStringList n = names;
+    if (n.isEmpty()) {
+        for (const auto& o : session_->document().state()->objects)
+            if (o->visible) n << QString::fromStdString(o->name);
+    }
+    if (n.size() == 1) return pyStr(n.front());
+    QStringList parts;
+    for (const auto& x : n) parts << "get(" + pyStr(x) + ")";
+    return parts.join(" | ");
+}
+
+QVariantMap AppController::checkForExport(const QStringList& names, double chordMm) {
+    QVariantMap out;
+    if (session_->document().state()->objects.empty()) {
+        out["ok"] = false;
+        out["summary"] = "Nothing to export: the document is empty.";
+        return out;
+    }
+    QJsonObject req{{"q", "check"}, {"expr", selectionExpr(names)}, {"chord", chordMm}};
+    ExecResult r = session_->run(QJsonDocument(req).toJson(QJsonDocument::Compact).toStdString(), "ui", ExecMode::Query);
+    if (!r.ok) {
+        out["ok"] = false;
+        out["summary"] = QString::fromStdString(r.error);
+        return out;
+    }
+    return QJsonDocument::fromJson(QByteArray::fromStdString(r.json)).object().toVariantMap();
+}
+
+void AppController::exportStl(const QStringList& names, const QString& path, const QString& unit, double chordMm,
+                              bool ascii) {
+    QString u = unit == "in" ? "inch" : unit;
+    QString src = "export_stl(" + selectionExpr(names) + ", " + pyStr(QDir::toNativeSeparators(path)) + ", unit=" + u +
+                  ", chord=" + reprDouble(chordMm) + "*mm" + (ascii ? ", ascii=True" : "") + ")";
+    execute(src, "ui");
+}
+
+QString AppController::defaultExportPath() const {
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    QString base = selection_.isEmpty() ? "export" : selection_.front();
+    return QDir(dir).filePath(base + ".stl");
+}
+
+QString AppController::dropFiles(const QList<QUrl>& urls) {
+    QStringList notes;
+    for (const auto& u : urls) {
+        QString p = u.toLocalFile();
+        QString ext = QFileInfo(p).suffix().toLower();
+        if (ext == "stl") execute("import_stl(" + pyStr(QDir::toNativeSeparators(p)) + ")", "ui");
+        else if (ext == "anvil") openDocument(p);
+        else if (ext == "step" || ext == "stp") notes << QFileInfo(p).fileName() + ": STEP import arrives with the B-Rep kernel (M2)";
+        else if (ext == "obj" || ext == "3mf") notes << QFileInfo(p).fileName() + ": OBJ/3MF import arrives in M5";
+        else if (ext == "png") notes << QFileInfo(p).fileName() + ": image input arrives with the AI tools (M6)";
+        else if (ext == "keras") notes << QFileInfo(p).fileName() + ": Keras models arrive with the Neural Lab (M6)";
+        else notes << QFileInfo(p).fileName() + ": unsupported file type";
+    }
+    if (!notes.isEmpty()) {
+        last_error_ = notes.join("\n");
+        emit lastErrorChanged();
+    }
+    return notes.join("\n");
+}
+
+void AppController::saveDocument(const QString& path) {
+    QString p = path.endsWith(".anvil") ? path : path + ".anvil";
+    execute("save(" + pyStr(QDir::toNativeSeparators(p)) + ")", "ui");
+    doc_path_ = p;
+    settings_.recent.removeAll(p);
+    settings_.recent.prepend(p);
+    emit documentPathChanged();
+}
+
+void AppController::openDocument(const QString& path) {
+    execute("load(" + pyStr(QDir::toNativeSeparators(path)) + ")", "ui");
+    doc_path_ = path;
+    emit documentPathChanged();
+}
+
+// ------------------------------------------------------------------ autosave / recovery
+void AppController::autosave() {
+    auto rev = session_->document().revision();
+    if (rev == saved_revision_) return;
+    try {
+        session_->save(session_dir_ / "autosave.anvil");
+        saved_revision_ = rev;
+        autosave_info_ = "Autosaved " + QDateTime::currentDateTime().toString("HH:mm:ss");
+    } catch (const std::exception& e) {
+        autosave_info_ = QString("Autosave failed: ") + e.what();
+    }
+    emit autosaveChanged();
+}
+
+void AppController::findRecovery() {
+    QDir root(QString::fromStdString(session_dir_.parent_path().string()));
+    QFileInfo best;
+    for (const QFileInfo& d : root.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time)) {
+        if (d.absoluteFilePath() == QString::fromStdString(session_dir_.string())) continue;
+        QFile lock(d.absoluteFilePath() + "/lock");
+        if (lock.open(QIODevice::ReadOnly) && pidAlive(lock.readAll().trimmed().toLongLong())) continue;  // other instance
+        QString j = d.absoluteFilePath() + "/journal.py";
+        if (!QFileInfo::exists(j)) {
+            QDir(d.absoluteFilePath()).removeRecursively();
+            continue;
+        }
+        JournalContents c = Journal::read(j.toStdString());
+        int n = 0;
+        for (const auto& a : c.actions)
+            if (a.kind == JournalAction::Txn && a.ok) ++n;
+        if (c.clean_close || n == 0) {
+            QDir(d.absoluteFilePath()).removeRecursively();
+            continue;
+        }
+        if (!best.exists()) {
+            best = d;
+            recovery_journal_ = j;
+            recovery_info_ = QString("An earlier session ended unexpectedly (%1, %2 command(s)). Restore it?")
+                                 .arg(d.lastModified().toString("yyyy-MM-dd HH:mm"))
+                                 .arg(n);
+        }
+    }
+}
+
+void AppController::recover() {
+    QString j = recovery_journal_;
+    if (j.isEmpty()) return;
+    std::thread([this, j] {
+        RecoveryReport rep = session_->replay(j.toStdString());
+        QMetaObject::invokeMethod(this, [this, rep, j] {
+            appendConsole(QString("recovered %1 command(s)").arg(rep.replayed));
+            for (const auto& u : rep.unfinished)
+                appendConsole("not replayed (it was running when the session ended): " + QString::fromStdString(u));
+            for (const auto& e : rep.errors) appendConsole("recovery error: " + QString::fromStdString(e));
+            QDir(QFileInfo(j).absolutePath()).removeRecursively();
+            recovery_journal_.clear();
+            recovery_info_.clear();
+            emit recoveryChanged();
+        }, Qt::QueuedConnection);
+    }).detach();
+}
+
+void AppController::discardRecovery() {
+    if (!recovery_journal_.isEmpty()) QDir(QFileInfo(recovery_journal_).absolutePath()).removeRecursively();
+    recovery_journal_.clear();
+    recovery_info_.clear();
+    emit recoveryChanged();
+}
+
+void AppController::saveRadialLayout(const QVariantMap& layout) {
+    radial_layout_ = layout;
+    settings_.radial_layout = layout;
+    settings_.save();
+}
+
+void AppController::resetRadialLayout() {
+    settings_.radial_layout.clear();
+    settings_.save();
+    radial_layout_ = default_layout_;
+}
+
+// ------------------------------------------------------------------ hardware
+void AppController::detectHardware() {
+    auto* p = new QProcess(this);
+    connect(p, &QProcess::finished, this, [this, p](int code, QProcess::ExitStatus) {
+        QString out = QString::fromUtf8(p->readAllStandardOutput()).trimmed();
+        if (code == 0 && !out.isEmpty()) {
+            QStringList f = out.section('\n', 0, 0).split(',');
+            for (auto& s : f) s = s.trimmed();
+            gpu_info_ = f.join("  ·  ");
+            if (f.size() >= 2) {
+                double mib = f[1].section(' ', 0, 0).toDouble();
+                if (mib > 0 && mib < 12 * 1024 * 0.95)
+                    hw_warning_ = QString("GPU has %1 GiB VRAM; ANVIL is tuned for 12 GiB").arg(mib / 1024, 0, 'f', 1);
+            }
+        } else {
+            gpu_info_ = "nvidia-smi not available";
+        }
+        emit gpuInfoChanged();
+        p->deleteLater();
+    });
+    connect(p, &QProcess::errorOccurred, this, [this, p](QProcess::ProcessError) {
+        gpu_info_ = "nvidia-smi not available";
+        emit gpuInfoChanged();
+        p->deleteLater();
+    });
+    p->start("nvidia-smi", {"--query-gpu=name,memory.total,driver_version,compute_cap", "--format=csv,noheader"});
+}
+
+}  // namespace anvil

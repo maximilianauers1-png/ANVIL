@@ -117,6 +117,20 @@ std::future<ExecResult> Session::submit(std::string source, std::string origin, 
     return f;
 }
 
+void Session::submit_async(std::string source, std::string origin, ExecMode mode,
+                           std::function<void(ExecResult)> done) {
+    post([this, source = std::move(source), origin = std::move(origin), mode, done = std::move(done)] {
+        ExecResult r;
+        try {
+            r = exec_on_python_thread(source, origin, mode);
+        } catch (const std::exception& e) {
+            r.ok = false;
+            r.error = e.what();
+        }
+        if (done) done(std::move(r));
+    });
+}
+
 ExecResult Session::run(const std::string& source, const std::string& origin, ExecMode mode) {
     return submit(source, origin, mode).get();
 }

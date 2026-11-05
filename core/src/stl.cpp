@@ -201,6 +201,8 @@ StlReadResult decode_stl(const std::string& bytes, LengthUnit unit) {
             r.header.assign(bytes.data(), 80);
             r.raw_triangles = n;
             w.mesh.F.reserve(n);
+            w.mesh.V.reserve(n / 2 + 16);   // closed meshes: V ~ F/2 (Euler)
+            w.map.reserve(n / 2 + 16);
             for (std::uint32_t i = 0; i < n; ++i) {
                 const unsigned char* q = p + 84 + 50ull * i + 12;
                 std::uint32_t id[3];

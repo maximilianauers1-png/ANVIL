@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "anvil/bvh.hpp"
+#include "anvil/sort.hpp"
 #include "anvil/tolerance.hpp"
 
 namespace anvil {
@@ -297,54 +298,64 @@ ValidationReport validate(const Mesh& m, const ValidationOptions& opt) {
     }
 
     // 2. half-edge pairing. h = 3f+k is the directed edge F[f][k] -> F[f][k+1].
+    // All half-edges are radix-sorted by their undirected key; a manifold,
+    // consistently oriented edge is a run of exactly two opposite half-edges.
     const std::size_t nh = 3 * m.F.size();
     auto tail = [&](std::size_t h) { return m.F[h / 3][h % 3]; };
     auto head = [&](std::size_t h) { return m.F[h / 3][(h % 3 + 1) % 3]; };
-    std::vector<std::pair<std::uint64_t, std::uint32_t>> dir(nh);
-    for (std::size_t h = 0; h < nh; ++h) dir[h] = {std::uint64_t(tail(h)) * nv + head(h), std::uint32_t(h)};
-    std::sort(dir.begin(), dir.end());
-    bool edge_ok = true;
-    for (std::size_t i = 1; i < nh; ++i)
-        if (dir[i].first == dir[i - 1].first) {
-            edge_ok = false;
-            auto a = dir[i].first / nv, b = dir[i].first % nv;
-            ctx.add(IssueKind::InconsistentOrient,
-                    "half-edge (" + std::to_string(a) + "->" + std::to_string(b) +
-                        ") used twice: flipped triangle or non-manifold edge (triangles #" +
-                        std::to_string(dir[i - 1].second / 3) + ", #" + std::to_string(dir[i].second / 3) + ")",
-                    dir[i].second / 3, m.V[a]);
-        }
-    std::unordered_map<std::uint64_t, std::uint32_t> und;
-    und.reserve(nh);
+    std::vector<std::uint64_t> keys(nh);
+    std::vector<std::uint32_t> hes(nh);
     for (std::size_t h = 0; h < nh; ++h) {
-        auto a = tail(h), b = head(h);
-        ++und[std::uint64_t(std::min(a, b)) * nv + std::max(a, b)];
+        std::uint64_t a = tail(h), b = head(h);
+        keys[h] = std::min(a, b) * nv + std::max(a, b);
+        hes[h] = std::uint32_t(h);
     }
-    std::vector<std::pair<std::uint64_t, std::uint32_t>> bad_edges;
-    for (const auto& [k, c] : und)
-        if (c != 2) bad_edges.emplace_back(k, c);
-    std::sort(bad_edges.begin(), bad_edges.end());
-    for (auto [k, c] : bad_edges) {
-        edge_ok = false;
-        auto a = k / nv, b = k % nv;
-        bool open = c == 1;
-        ctx.add(open ? IssueKind::OpenEdge : IssueKind::NonManifoldEdge,
-                std::string(open ? "open (boundary) edge" : "non-manifold edge") + " (" + std::to_string(a) + "-" +
-                    std::to_string(b) + ") has " + std::to_string(c) + " incident triangle(s), expected 2",
-                std::int64_t(a), (m.V[a] + m.V[b]) * 0.5);
+    radix_sort_pairs(keys, hes, bits_for(nv * nv));
+    std::vector<std::uint32_t> twin(nh, UINT32_MAX);
+    bool edge_ok = true;
+    std::size_t E = 0;
+    std::vector<std::uint64_t> edge_first;  // one half-edge per undirected edge (for shell edge counts)
+    edge_first.reserve(nh / 2);
+    for (std::size_t i = 0; i < nh;) {
+        std::size_t j = i + 1;
+        while (j < nh && keys[j] == keys[i]) ++j;
+        const std::size_t c = j - i;
+        ++E;
+        edge_first.push_back(hes[i]);
+        const auto a = keys[i] / nv, b = keys[i] % nv;
+        if (c == 2) {
+            std::uint32_t h1 = hes[i], h2 = hes[i + 1];
+            if (tail(h1) == tail(h2)) {
+                edge_ok = false;
+                ctx.add(IssueKind::InconsistentOrient,
+                        "half-edge (" + std::to_string(tail(h1)) + "->" + std::to_string(head(h1)) +
+                            ") used twice: flipped triangle (triangles #" + std::to_string(h1 / 3) + ", #" +
+                            std::to_string(h2 / 3) + ")",
+                        std::int64_t(h2 / 3), m.V[tail(h1)]);
+            } else {
+                twin[h1] = h2;
+                twin[h2] = h1;
+            }
+        } else {
+            edge_ok = false;
+            bool open = c == 1;
+            ctx.add(open ? IssueKind::OpenEdge : IssueKind::NonManifoldEdge,
+                    std::string(open ? "open (boundary) edge" : "non-manifold edge") + " (" + std::to_string(a) + "-" +
+                        std::to_string(b) + ") has " + std::to_string(c) + " incident triangle(s), expected 2",
+                    std::int64_t(a), (m.V[a] + m.V[b]) * 0.5);
+        }
+        i = j;
     }
-    const std::size_t E = und.size();
+    keys.clear();
+    keys.shrink_to_fit();
+    hes.clear();
+    hes.shrink_to_fit();
     if (edge_ok && 3 * m.F.size() != 2 * E)
         ctx.add(IssueKind::EulerMismatch, "3F != 2E (" + std::to_string(3 * m.F.size()) + " != " +
                                               std::to_string(2 * E) + ")");
 
     // 3. vertex manifoldness: count triangle fans per vertex via rot(h) = twin(next(h)).
     if (edge_ok) {
-        auto twin = [&](std::size_t h) -> std::size_t {
-            std::uint64_t key = std::uint64_t(head(h)) * nv + tail(h);
-            auto it = std::lower_bound(dir.begin(), dir.end(), std::make_pair(key, std::uint32_t(0)));
-            return it->second;
-        };
         std::vector<std::uint8_t> seen(nh, 0);
         std::vector<std::uint32_t> fans(nv, 0);
         for (std::size_t h0 = 0; h0 < nh; ++h0) {
@@ -353,7 +364,7 @@ ValidationReport validate(const Mesh& m, const ValidationOptions& opt) {
             do {  // h is an incoming half-edge of head(h0)
                 seen[h] = 1;
                 std::size_t nxt = (h / 3) * 3 + (h % 3 + 1) % 3;
-                h = twin(nxt);
+                h = twin[nxt];
             } while (h != h0);
             ++fans[head(h0)];
         }
@@ -388,7 +399,7 @@ ValidationReport validate(const Mesh& m, const ValidationOptions& opt) {
         for (auto v : t)
             if (!vused[v]) vused[v] = 1, ++s.vertices;
     }
-    for (const auto& [k, c] : und) (void)c, ++shells[shell_of[find(parent, std::uint32_t(k / nv))]].edges;
+    for (std::uint64_t h : edge_first) ++shells[shell_of[find(parent, tail(h))]].edges;
     for (std::size_t i = 0; i < shells.size(); ++i) {
         auto& s = shells[i];
         s.euler = long(s.vertices) - long(s.edges) + long(s.faces);

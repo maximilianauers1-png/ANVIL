@@ -206,7 +206,7 @@ for _name, _label in (("top", "Top view"), ("bottom", "Bottom view"), ("front", 
 # Radial layout: slot index = sector (0 = east, counter-clockwise in 45 degree steps).
 # Positions are stable across contexts: inapplicable commands are greyed out,
 # never removed or reordered (muscle memory).
-_VIEW = {"submenu": "View", "items": ["view.right", "view.iso", "view.top", "view.back", "view.left",
+_VIEW = {"submenu": "View", "items": ["view.right", "view.iso", "view.top", "view.bottom", "view.left",
                                       "view.ortho", "view.front", "view.frame"]}
 registry.radial = {
     "Design": {

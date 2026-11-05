@@ -114,6 +114,11 @@ def query(q: str) -> dict:
         if name == "build":
             src = registry.build(req["id"], req.get("ctx", {}))
             return {"ok": True, "json": json.dumps({"source": src})}
+        if name == "check":
+            from . import api
+            target = eval(req["expr"], _NS)
+            rep = api.check(target, chord=req.get("chord", 0.01) * api.mm)
+            return {"ok": True, "json": json.dumps(rep)}
         if name == "plugins":
             return {"ok": True, "json": json.dumps(_plugin_report)}
         if name == "signature":

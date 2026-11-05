@@ -64,6 +64,8 @@ class Session {
     Session& operator=(const Session&) = delete;
 
     std::future<ExecResult> submit(std::string source, std::string origin, ExecMode mode = ExecMode::Command);
+    /// Asynchronous variant: `done` is called on the Python thread with the result.
+    void submit_async(std::string source, std::string origin, ExecMode mode, std::function<void(ExecResult)> done);
     /// Convenience: submit and wait.
     ExecResult run(const std::string& source, const std::string& origin = "script",
                    ExecMode mode = ExecMode::Command);

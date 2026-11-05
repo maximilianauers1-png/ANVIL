@@ -1,7 +1,7 @@
 #include "anvil/mesh.hpp"
 
 #include <algorithm>
-#include <unordered_map>
+#include "anvil/sort.hpp"
 
 namespace anvil {
 
@@ -51,33 +51,28 @@ void Mesh::append(const Mesh& o) {
 
 std::vector<std::array<std::uint32_t, 2>> feature_edges(const Mesh& m, double angle_rad) {
     const double cos_thr = std::cos(angle_rad);
-    std::vector<Vec3> fn(m.F.size());
-    for (std::size_t i = 0; i < m.F.size(); ++i) {
-        const auto& t = m.F[i];
-        fn[i] = normalized(cross(m.V[t[1]] - m.V[t[0]], m.V[t[2]] - m.V[t[0]]));
-    }
-    // key = min*N + max -> (first face, count, second face)
-    struct E { std::uint32_t f0, f1, n; };
-    std::unordered_map<std::uint64_t, E> edges;
-    edges.reserve(m.F.size() * 2);
+    const std::size_t nh = 3 * m.F.size();
     const std::uint64_t N = m.V.size();
-    for (std::uint32_t i = 0; i < m.F.size(); ++i) {
-        for (int k = 0; k < 3; ++k) {
-            std::uint32_t a = m.F[i][k], b = m.F[i][(k + 1) % 3];
-            std::uint64_t key = std::uint64_t(std::min(a, b)) * N + std::max(a, b);
-            auto [it, inserted] = edges.try_emplace(key, E{i, 0, 1});
-            if (!inserted) {
-                it->second.f1 = i;
-                ++it->second.n;
-            }
-        }
+    std::vector<std::uint64_t> keys(nh);
+    std::vector<std::uint32_t> hes(nh);
+    for (std::size_t h = 0; h < nh; ++h) {
+        std::uint64_t a = m.F[h / 3][h % 3], b = m.F[h / 3][(h % 3 + 1) % 3];
+        keys[h] = std::min(a, b) * N + std::max(a, b);
+        hes[h] = std::uint32_t(h);
     }
+    radix_sort_pairs(keys, hes, bits_for(N * N));
+    auto normal = [&](std::size_t f) {
+        const auto& t = m.F[f];
+        return normalized(cross(m.V[t[1]] - m.V[t[0]], m.V[t[2]] - m.V[t[0]]));
+    };
     std::vector<std::array<std::uint32_t, 2>> out;
-    for (const auto& [key, e] : edges) {
-        bool feature = e.n != 2 || dot(fn[e.f0], fn[e.f1]) < cos_thr;
-        if (feature) out.push_back({std::uint32_t(key / N), std::uint32_t(key % N)});
+    for (std::size_t i = 0; i < nh;) {
+        std::size_t j = i + 1;
+        while (j < nh && keys[j] == keys[i]) ++j;
+        bool feature = j - i != 2 || dot(normal(hes[i] / 3), normal(hes[i + 1] / 3)) < cos_thr;
+        if (feature) out.push_back({std::uint32_t(keys[i] / N), std::uint32_t(keys[i] % N)});  // sorted order
+        i = j;
     }
-    std::sort(out.begin(), out.end());  // deterministic order
     return out;
 }
 
