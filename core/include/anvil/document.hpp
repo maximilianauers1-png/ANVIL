@@ -30,6 +30,10 @@ struct DocState {
 
     const Object* find(const std::string& name) const;
     VariableResolver resolver() const;
+    /// Object name -> root node (for Ref nodes), valid independent of this state's lifetime.
+    ObjectLookup lookup() const;
+    /// Evaluation settings with the lookup filled in.
+    EvalSettings eval_settings(double chord_mm) const;
     /// Canonical Python script that rebuilds this state (the .anvil format).
     std::string to_python(const std::string& header_comment = {}) const;
     /// Unique default name: prefix + smallest free positive integer.

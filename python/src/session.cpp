@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "anvil/fsutil.hpp"
+#include "paths.hpp"
 #include "anvil/version.hpp"
 
 namespace py = pybind11;
@@ -32,6 +33,15 @@ Session* Session::current() { return g_current; }
 
 Session::Session(SessionOptions opt) : opt_(std::move(opt)) {
     register_embedded_module();
+    // B-Rep kernel in its own process (ADR 0001); started lazily on first use.
+    auto worker = opt_.geom_worker.empty() ? default_geom_worker(executable_dir()) : opt_.geom_worker;
+    geom_ = std::make_shared<GeomClient>(worker);
+    std::weak_ptr<GeomClient> weak = geom_;
+    set_brep_backend([weak](const std::string& json, double chord) {
+        auto g = weak.lock();
+        if (!g) throw GeometryError("the B-Rep kernel is shutting down");
+        return g->eval(json, chord);
+    });
     if (!opt_.journal_path.empty()) journal_ = std::make_unique<Journal>(opt_.journal_path);
     auto ready = ready_.get_future();
     py_thread_ = std::thread([this] { python_main(); });
@@ -142,11 +152,11 @@ std::string Session::check_state_evaluates() {
     auto now = doc_.current();
     bool vars_changed = before->vars != now->vars;
     auto vars = now->resolver();
-    EvalSettings es;
-    es.chord_mm = opt_.display_chord_mm;
+    EvalSettings es = now->eval_settings(opt_.display_chord_mm);
     for (const auto& o : now->objects) {
-        const Object* old = before->find(o->name);
-        if (!vars_changed && old && old->root == o->root) continue;
+        // Objects can reference each other (Ref nodes), so after any change every
+        // object is checked; unchanged ones are cache hits.
+        (void)vars_changed;
         try {
             evaluate(o->root, vars, es, &cache_);
         } catch (const std::exception& e) {
@@ -199,9 +209,8 @@ ExecResult Session::exec_on_python_thread(const std::string& source, const std::
             r.preview = preview_;
             if (r.preview) {
                 try {
-                    EvalSettings es;
-                    es.chord_mm = opt_.display_chord_mm;
-                    evaluate(r.preview, doc_.state()->resolver(), es, &cache_);
+                    auto st = doc_.state();
+                    evaluate(r.preview, st->resolver(), st->eval_settings(opt_.display_chord_mm), &cache_);
                 } catch (const std::exception& e) {
                     r.ok = false, r.error = e.what(), r.preview.reset();
                 }

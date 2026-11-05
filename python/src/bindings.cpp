@@ -7,6 +7,7 @@
 #include <filesystem>
 
 #include "anvil/geometry.hpp"
+#include "anvil/sketch.hpp"
 #include "anvil/stl.hpp"
 #include "anvil/tolerance.hpp"
 #include "anvil/validate.hpp"
@@ -100,9 +101,89 @@ py::dict report_dict(const ValidationReport& r) {
 }
 
 std::shared_ptr<const Shape> eval_node(const NodeHandle& n, double chord) {
-    EvalSettings es;
-    es.chord_mm = chord;
-    return evaluate(n.node, S().document().current()->resolver(), es, &S().cache());
+    auto st = S().document().current();
+    return evaluate(n.node, st->resolver(), st->eval_settings(chord), &S().cache());
+}
+
+// ---- sketches as plain Python structures (the Python Sketch class edits these) ----
+py::dict sketch_to_dict(const Sketch& s) {
+    py::dict d, pts, crv, con;
+    d["plane"] = std::string(plane_name(s.plane));
+    d["offset"] = s.offset;
+    for (const auto& [id, p] : s.points) pts[py::str(id)] = py::make_tuple(p.x, p.y);
+    for (const auto& [id, c] : s.curves) {
+        const char* k = c.kind == CurveKind::Line ? "line" : c.kind == CurveKind::Circle ? "circle" : "arc";
+        crv[py::str(id)] = py::make_tuple(k, c.pts, c.radius, c.construction);
+    }
+    for (const auto& [id, c] : s.constraints)
+        con[py::str(id)] = py::make_tuple(std::string(constraint_name(c.kind)), c.refs,
+                                          py::make_tuple(c.value.value, c.value.expr),
+                                          py::make_tuple(c.value2.value, c.value2.expr));
+    d["points"] = pts, d["curves"] = crv, d["constraints"] = con;
+    return d;
+}
+
+Sketch sketch_from_dict(const py::dict& d) {
+    Sketch s;
+    auto plane = parse_plane(d["plane"].cast<std::string>());
+    if (!plane) throw std::invalid_argument("sketch plane must be XY, XZ or YZ");
+    s.plane = *plane;
+    s.offset = d.contains("offset") ? d["offset"].cast<double>() : 0.0;
+    for (auto [k, v] : d["points"].cast<py::dict>()) {
+        auto t = v.cast<py::tuple>();
+        s.points[k.cast<std::string>()] = {t[0].cast<double>(), t[1].cast<double>()};
+    }
+    for (auto [k, v] : d["curves"].cast<py::dict>()) {
+        auto t = v.cast<py::tuple>();
+        SketchCurve c;
+        std::string kind = t[0].cast<std::string>();
+        c.kind = kind == "line" ? CurveKind::Line : kind == "circle" ? CurveKind::Circle
+                 : kind == "arc" ? CurveKind::Arc : throw std::invalid_argument("unknown curve kind '" + kind + "'");
+        c.pts = t[1].cast<std::vector<std::string>>();
+        c.radius = t.size() > 2 ? t[2].cast<double>() : 0.0;
+        c.construction = t.size() > 3 && t[3].cast<bool>();
+        s.curves[k.cast<std::string>()] = c;
+    }
+    for (auto [k, v] : d["constraints"].cast<py::dict>()) {
+        auto t = v.cast<py::tuple>();
+        auto kind = parse_constraint(t[0].cast<std::string>());
+        if (!kind) throw std::invalid_argument("unknown constraint '" + t[0].cast<std::string>() + "'");
+        SketchConstraint c;
+        c.kind = *kind;
+        c.refs = t[1].cast<std::vector<std::string>>();
+        if (t.size() > 2) {
+            auto a = t[2].cast<py::tuple>();
+            c.value = {a[0].cast<double>(), a[1].cast<std::string>()};
+        }
+        if (t.size() > 3) {
+            auto b = t[3].cast<py::tuple>();
+            c.value2 = {b[0].cast<double>(), b[1].cast<std::string>()};
+        }
+        s.constraints[k.cast<std::string>()] = c;
+    }
+    return s;
+}
+
+py::dict status_dict(const SolveStatus& st) {
+    py::dict d;
+    d["converged"] = st.converged;
+    d["dof"] = st.dof;
+    d["residual"] = st.residual;
+    d["message"] = st.message;
+    d["entities"] = st.entity_state;
+    d["constraints"] = st.constraint_state;
+    return d;
+}
+
+NodeKind feature_kind(const std::string& k) {
+    static const std::map<std::string, NodeKind> m{
+        {"extrude", NodeKind::Extrude}, {"revolve", NodeKind::Revolve}, {"fillet", NodeKind::Fillet},
+        {"chamfer", NodeKind::EdgeChamfer}, {"shell", NodeKind::Shell}, {"linear_pattern", NodeKind::LinearPattern},
+        {"circular_pattern", NodeKind::CircularPattern}, {"loft", NodeKind::Loft}, {"sweep", NodeKind::Sweep},
+        {"step", NodeKind::StepImport}};
+    auto it = m.find(k);
+    if (it == m.end()) throw std::invalid_argument("unknown feature '" + k + "'");
+    return it->second;
 }
 
 }  // namespace
@@ -142,6 +223,33 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
     m.def("make_transform", [](const NodeHandle& src, const ParamDict& p) {
         return NodeHandle{make_transform(src.node, to_params(p))};
     });
+    // --- M2: sketches, features, references, STEP ---------------------------------
+    m.def("make_sketch", [](const py::dict& d) { return NodeHandle{make_sketch(std::make_shared<Sketch>(sketch_from_dict(d)))}; });
+    m.def("sketch_dict", [](const NodeHandle& n) {
+        if (n.node->kind != NodeKind::Sketch) throw std::invalid_argument("not a sketch");
+        return sketch_to_dict(*n.node->sketch);
+    });
+    m.def("sketch_solve", [](const NodeHandle& n) {
+        if (n.node->kind != NodeKind::Sketch) throw std::invalid_argument("not a sketch");
+        auto [solved, st] = solve_sketch(*n.node->sketch, S().document().current()->resolver());
+        return py::make_tuple(NodeHandle{make_sketch(std::make_shared<Sketch>(solved))}, status_dict(st));
+    });
+    m.def("make_feature", [](const std::string& kind, const std::vector<NodeHandle>& in, const ParamDict& p,
+                             const std::map<std::string, std::string>& attrs) {
+        std::vector<NodePtr> inputs;
+        for (const auto& h : in) inputs.push_back(h.node);
+        return NodeHandle{make_feature(feature_kind(kind), inputs, to_params(p), attrs)};
+    });
+    m.def("make_ref", [](const std::string& name) { return NodeHandle{make_ref(name)}; });
+    m.def("export_step", [](const NodeHandle& n, const std::string& path) {
+        if (S().replaying()) return;
+        auto st = S().document().current();
+        std::string json = brep_json(n.node, st->resolver(), st->eval_settings(tol::kDefaultChordMm));
+        S().geom().export_step(json, upath(path));
+    });
+    m.def("geom_starts", [] { return S().geom().starts(); });
+    m.def("geom_debug_crash", [] { S().geom().debug_crash(); });
+
     m.def("with_params", [](const NodeHandle& n, const std::string& path, const ParamDict& p) {
         return NodeHandle{with_params(n.node, path, to_params(p))};
     });

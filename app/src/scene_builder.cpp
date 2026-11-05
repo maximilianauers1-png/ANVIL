@@ -62,6 +62,22 @@ std::shared_ptr<const MeshCpu> SceneBuilder::to_gpu(const std::shared_ptr<const 
     return g;
 }
 
+std::shared_ptr<const MeshCpu> SceneBuilder::lines_to_gpu(const std::shared_ptr<const Mesh>& l) {
+    auto it = gpu_cache_.find(l.get());
+    if (it != gpu_cache_.end()) return it->second.second;
+    auto g = std::make_shared<MeshCpu>();
+    g->key = next_key_++;
+    Box3 b = l->bounds();
+    g->origin = b.empty() ? Vec3{} : b.center();
+    for (std::size_t i = 0; i < l->V.size(); ++i) {
+        Vec3 p = l->V[i] - g->origin;
+        g->pos.insert(g->pos.end(), {float(p.x), float(p.y), float(p.z)});
+        g->edges.push_back(std::uint32_t(i));
+    }
+    gpu_cache_[l.get()] = {l, g};
+    return g;
+}
+
 void SceneBuilder::loop() {
     for (;;) {
         std::shared_ptr<const DocState> state;
@@ -85,6 +101,8 @@ void SceneBuilder::loop() {
         }
         EvalSettings es;
         es.chord_mm = chord;
+        if (state) es.lookup = state->lookup();
+        else if (ghost) es.lookup = ghost->second->lookup();
         if (do_ghost) {
             std::shared_ptr<const MeshCpu> g;
             if (ghost) {
@@ -108,6 +126,15 @@ void SceneBuilder::loop() {
             so.visible = o->visible;
             try {
                 auto sh = evaluate(o->root, vars, es, &cache_);
+                if (sh->lines) {  // sketch: line geometry only
+                    alive[sh->lines.get()] = true;
+                    so.gpu = lines_to_gpu(sh->lines);
+                    so.bounds = sh->lines->bounds();
+                    so.manifold = true;
+                    if (o->visible) scene->bounds.add(so.bounds);
+                    scene->objects.push_back(std::move(so));
+                    continue;
+                }
                 so.gpu = to_gpu(sh->mesh);
                 alive[sh->mesh.get()] = true;
                 auto sc = snap_cache_.find(sh->mesh.get());

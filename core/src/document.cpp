@@ -49,6 +49,22 @@ VariableResolver DocState::resolver() const {
     return [self](std::string_view n) { return (*self)(n); };
 }
 
+ObjectLookup DocState::lookup() const {
+    auto table = std::make_shared<std::map<std::string, NodePtr>>();
+    for (const auto& o : objects) (*table)[o->name] = o->root;
+    return [table](const std::string& n) -> NodePtr {
+        auto it = table->find(n);
+        return it == table->end() ? nullptr : it->second;
+    };
+}
+
+EvalSettings DocState::eval_settings(double chord_mm) const {
+    EvalSettings es;
+    es.chord_mm = chord_mm;
+    es.lookup = lookup();
+    return es;
+}
+
 std::string DocState::unique_name(const std::string& prefix) const {
     for (int i = 1;; ++i) {
         std::string n = prefix + std::to_string(i);

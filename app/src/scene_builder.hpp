@@ -51,6 +51,7 @@ class SceneBuilder {
   private:
     void loop();
     std::shared_ptr<const MeshCpu> to_gpu(const std::shared_ptr<const Mesh>& m);
+    std::shared_ptr<const MeshCpu> lines_to_gpu(const std::shared_ptr<const Mesh>& lines);
 
     ShapeCache& cache_;
     Ready on_ready_;

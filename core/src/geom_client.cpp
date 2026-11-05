@@ -90,7 +90,8 @@ std::shared_ptr<const Mesh> GeomClient::eval(const std::string& tree, double cho
 
 void GeomClient::export_step(const std::string& tree, const std::filesystem::path& path) {
     std::lock_guard lk(mu_);
-    nlohmann::json req{{"op", "step_export"}, {"path", path.u8string()}};
+    auto u8 = path.u8string();
+    nlohmann::json req{{"op", "step_export"}, {"path", std::string(u8.begin(), u8.end())}};
     std::string r = req.dump();
     r.insert(r.size() - 1, R"(,"tree":)" + tree);
     call(r, nullptr);

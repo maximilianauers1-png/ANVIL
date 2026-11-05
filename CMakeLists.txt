@@ -12,6 +12,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(ANVIL_BUILD_APP   "Build the Qt Quick desktop application" ON)
 option(ANVIL_BUILD_TESTS "Build unit and acceptance tests" ON)
+option(ANVIL_BUILD_GEOM  "Build the OpenCASCADE worker (anvil-geom)" ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "" FORCE)
@@ -27,6 +28,9 @@ include(cmake/Warnings.cmake)
 
 add_subdirectory(core)
 add_subdirectory(python)
+if(ANVIL_BUILD_GEOM)
+  add_subdirectory(workers/geom)
+endif()
 if(ANVIL_BUILD_APP)
   add_subdirectory(app)
 endif()

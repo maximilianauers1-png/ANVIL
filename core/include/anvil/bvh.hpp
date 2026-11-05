@@ -28,7 +28,10 @@ class Bvh {
                                   double t_max = INFINITY) const;
     /// Calls f(tri) for each triangle whose box overlaps `box`.
     void query(const Box3& box, const std::function<void(std::uint32_t)>& f) const;
-    const Box3& bounds() const { return nodes_.front().box; }
+    const Box3& bounds() const {
+        static const Box3 empty_box;
+        return nodes_.empty() ? empty_box : nodes_.front().box;
+    }
     std::size_t node_count() const { return nodes_.size(); }
 
   private:

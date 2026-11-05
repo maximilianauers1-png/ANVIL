@@ -17,13 +17,16 @@ from typing import Iterable, Union
 
 import _anvil as _a
 
+from .sketch import Sketch
 from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 
 __all__ = [
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
     "subtract", "union", "intersect", "duplicate", "clear", "export_stl", "import_stl", "import_mesh",
-    "check", "info", "save", "load", "view", "theme", "display", "select", "set_unit", "GeometryError",
+    "check", "info", "save", "load", "Sketch", "extrude", "revolve", "fillet", "chamfer_edges", "shell",
+    "pattern_linear", "pattern_circular", "loft", "sweep", "ref", "import_step", "import_step_solid",
+    "export_step", "view", "theme", "display", "select", "set_unit", "GeometryError",
 ]
 
 GeometryError = _a.GeometryError
@@ -32,6 +35,9 @@ _state = {"shown": False}  # whether show() ran in the current command (REPL con
 # --------------------------------------------------------------------------- params
 
 _PARAM_DIMS = {
+    "extrude": {"distance": LENGTH}, "revolve": {"angle": ANGLE}, "fillet": {"r": LENGTH},
+    "chamfer": {"d": LENGTH}, "shell": {"t": LENGTH},
+    "linear_pattern": {"dx": LENGTH, "dy": LENGTH, "dz": LENGTH}, "circular_pattern": {"angle": ANGLE},
     "box": {"x": LENGTH, "y": LENGTH, "z": LENGTH},
     "cylinder": {"d": LENGTH, "h": LENGTH, "d2": LENGTH, "chamfer_top": LENGTH, "chamfer_bottom": LENGTH},
     "sphere": {"d": LENGTH},
@@ -70,6 +76,8 @@ def _params(kind: str, kw: dict) -> dict:
 
 
 def _node(x):
+    if isinstance(x, Sketch):
+        return x._node()
     if isinstance(x, Solid):
         return x._node
     if isinstance(x, Obj):
@@ -118,11 +126,19 @@ class Solid:
         """Rotate about the origin: first X, then Y, then Z."""
         return transform(self, rx=x, ry=y, rz=z)
 
-    def chamfer(self, top=None, bottom=None) -> "Solid":
-        """45-degree chamfer of the top/bottom circular edge (cylinders and cones).
-        General edge chamfers arrive with the B-Rep kernel (M2)."""
+    def fillet(self, r=1 * mm, edges: str = "all") -> "Solid":
+        return fillet(self, r, edges)
+
+    def shell(self, t=1 * mm, faces: str = "top") -> "Solid":
+        return shell(self, t, faces)
+
+    def chamfer(self, d=None, edges: str = None, top=None, bottom=None) -> "Solid":
+        """Cylinders: chamfer(top=0.6*mm) (exact, mesh kernel). Any solid:
+        chamfer(0.5*mm, edges="top") (B-Rep kernel)."""
+        if d is not None or edges is not None:
+            return chamfer_edges(self, d if d is not None else 0.5 * mm, edges or "all")
         if self._node.kind != "Cylinder":
-            raise TypeError(f"chamfer() is available for cylinders in M1, not for {self._node.kind}")
+            raise TypeError(f"use chamfer(d, edges=...) for a {self._node.kind}")
         return Solid(_a.with_params(self._node, "", _params("cylinder", {"chamfer_top": top, "chamfer_bottom": bottom})))
 
     def with_params(self, **kw) -> "Solid":
@@ -218,6 +234,106 @@ def transform(s, tx=None, ty=None, tz=None, rx=None, ry=None, rz=None) -> Solid:
     """Rotate (X, then Y, then Z, about the origin), then translate."""
     p = _params("transform", {"tx": tx, "ty": ty, "tz": tz, "rx": rx, "ry": ry, "rz": rz})
     return Solid(_a.make_transform(_node(s), p))
+
+
+# --------------------------------------------------------------------------- M2 features
+
+def _sk(x):
+    from .sketch import Sketch
+    if isinstance(x, Sketch):
+        return x._node()
+    return _node(x)
+
+
+def _flag(v) -> tuple:
+    return (1.0 if v else 0.0, "")
+
+
+def extrude(sketch, distance=10 * mm, symmetric: bool = False) -> Solid:
+    """Extrudes the closed profiles of a sketch along its normal (holes stay holes)."""
+    p = _params("extrude", {"distance": distance})
+    p["symmetric"] = _flag(symmetric)
+    return Solid(_a.make_feature("extrude", [_sk(sketch)], p, {}))
+
+
+def revolve(sketch, angle=360 * deg, axis: str = "v") -> Solid:
+    """Revolves the profiles about the sketch's horizontal ('u') or vertical ('v') axis."""
+    if axis not in ("u", "v"):
+        raise ValueError("revolve(axis=...): 'u' (horizontal) or 'v' (vertical)")
+    p = _params("revolve", {"angle": angle})
+    p["axis"] = (1.0 if axis == "v" else 0.0, "")
+    return Solid(_a.make_feature("revolve", [_sk(sketch)], p, {}))
+
+
+def fillet(solid, r=1 * mm, edges: str = "all") -> Solid:
+    """Rounds edges. edges: 'all', 'top', 'bottom', 'vertical', 'horizontal' or
+    'near:x,y,z;x,y,z' (the edge closest to each point, in mm)."""
+    return Solid(_a.make_feature("fillet", [_node(solid)], _params("fillet", {"r": r}), {"edges": edges}))
+
+
+def chamfer_edges(solid, d=0.5 * mm, edges: str = "all") -> Solid:
+    return Solid(_a.make_feature("chamfer", [_node(solid)], _params("chamfer", {"d": d}), {"edges": edges}))
+
+
+def shell(solid, t=1 * mm, faces: str = "top") -> Solid:
+    """Hollows a solid with wall thickness t, opening the 'top'/'bottom' faces ('none': closed)."""
+    return Solid(_a.make_feature("shell", [_node(solid)], _params("shell", {"t": t}), {"faces": faces}))
+
+
+def pattern_linear(solid, n: int = 3, dx=10 * mm, dy=0 * mm, dz=0 * mm) -> Solid:
+    p = _params("linear_pattern", {"dx": dx, "dy": dy, "dz": dz})
+    p["n"] = (float(n), "")
+    return Solid(_a.make_feature("linear_pattern", [_node(solid)], p, {}))
+
+
+def pattern_circular(solid, n: int = 6, angle=360 * deg) -> Solid:
+    """n copies about the Z axis, spread over `angle` (360 deg: evenly around)."""
+    p = _params("circular_pattern", {"angle": angle})
+    p["n"] = (float(n), "")
+    return Solid(_a.make_feature("circular_pattern", [_node(solid)], p, {}))
+
+
+def loft(*sketches, ruled: bool = False) -> Solid:
+    """Solid through the outer profiles of two or more sketches (in order)."""
+    return Solid(_a.make_feature("loft", [_sk(s) for s in sketches], {"ruled": _flag(ruled)}, {}))
+
+
+def sweep(profile, path) -> Solid:
+    """Sweeps a closed profile sketch along an open path sketch."""
+    return Solid(_a.make_feature("sweep", [_sk(profile), _sk(path)], {}, {}))
+
+
+def ref(name: str) -> Solid:
+    """Parametric link to another object: follows every later change of it."""
+    _a.get(name)
+    return Solid(_a.make_ref(name))
+
+
+def import_step_solid(path: str, sha256: str = "") -> Solid:
+    import hashlib
+    p = _os.path.abspath(_os.fspath(path))
+    with open(p, "rb") as f:
+        h = hashlib.sha256(f.read()).hexdigest()
+    if sha256 and sha256 != h:
+        raise ValueError(f"'{p}' changed since it was imported (sha256 {h[:12]}... != {sha256[:12]}...)")
+    return Solid(_a.make_feature("step", [], {}, {"path": p, "sha256": h}))
+
+
+def import_step(path: str, name: str = None) -> Obj:
+    """Imports a STEP file as an exact B-Rep object (filletable, exportable)."""
+    s = import_step_solid(path)
+    base = _os.path.splitext(_os.path.basename(path))[0]
+    base = "".join(c if c.isalnum() or c in "_-" else "_" for c in base) or "Step"
+    if not base[0].isalpha():
+        base = "S_" + base
+    return show(s, name=name or base)
+
+
+def export_step(s, path: str):
+    """Exports exact geometry as STEP AP214 (unit mm)."""
+    path = _os.path.abspath(_os.fspath(path))
+    _a.export_step(_node(s), path)
+    print(f"exported {path} (STEP, mm)")
 
 
 # --------------------------------------------------------------------------- document commands

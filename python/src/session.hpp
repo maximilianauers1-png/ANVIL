@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "anvil/document.hpp"
+#include "anvil/geom_client.hpp"
 #include "anvil/journal.hpp"
 #include "anvil/validate.hpp"
 
@@ -54,6 +55,7 @@ struct SessionOptions {
     std::filesystem::path journal_path;   // empty: no journal (tests, CLI without --journal)
     std::filesystem::path plugin_dir;     // user plugins (optional)
     double display_chord_mm = 0.01;       // tol::kDefaultChordMm
+    std::filesystem::path geom_worker;    // anvil-geom executable (empty: next to this executable)
 };
 
 class Session {
@@ -81,6 +83,7 @@ class Session {
     ExecResult open(const std::filesystem::path& p);
 
     Document& document() { return doc_; }
+    GeomClient& geom() { return *geom_; }
     ShapeCache& cache() { return cache_; }
     const SessionOptions& options() const { return opt_; }
     void set_display_chord(double mm) { opt_.display_chord_mm = mm; }
@@ -108,6 +111,7 @@ class Session {
 
     SessionOptions opt_;
     Document doc_;
+    std::shared_ptr<GeomClient> geom_;
     ShapeCache cache_{512};
     std::unique_ptr<Journal> journal_;
     std::thread py_thread_;

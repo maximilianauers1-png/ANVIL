@@ -37,3 +37,10 @@ add_executable(anvil-bench ${PROJECT_SOURCE_DIR}/bench/anvil_bench.cpp)
 target_link_libraries(anvil-bench PRIVATE anvil_core)
 anvil_warnings(anvil-bench)
 install(TARGETS anvil-bench RUNTIME DESTINATION .)
+
+# M2 acceptance (B-Rep kernel in the anvil-geom worker): features, STEP, crash isolation, parametric clamp.
+if(ANVIL_BUILD_GEOM)
+  add_test(NAME acceptance_m2
+           COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/m2_suite.py)
+  set_tests_properties(acceptance_m2 PROPERTIES PASS_REGULAR_EXPRESSION "M2 SUITE OK" TIMEOUT 600)
+endif()
