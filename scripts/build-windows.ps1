@@ -64,6 +64,13 @@ try {
   $ver = & $pyExe -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')"
   Copy-Item (Join-Path $pyHome "python$ver.dll") $dist
   Copy-Item (Join-Path $pyHome "python3.dll") $dist
+  # Visual C++ runtime, app-local (no separate redistributable install needed)
+  $crt = $null
+  if ($env:VCToolsRedistDir) {
+    $crt = Get-ChildItem (Join-Path $env:VCToolsRedistDir "x64") -Directory -Filter "Microsoft.VC*.CRT" | Select-Object -First 1
+  }
+  if ($crt) { Copy-Item (Join-Path $crt.FullName "*.dll") $dist }
+  else { Get-ChildItem $pyHome -Filter "vcruntime140*.dll" | ForEach-Object { Copy-Item $_.FullName $dist } }
   $zip = Join-Path $dist "python$ver.zip"
   & $pyExe (Join-Path $root "scripts\make_python_zip.py") (Join-Path $pyHome "Lib") $zip
   if ($LASTEXITCODE) { throw "stdlib zip failed" }
@@ -78,6 +85,11 @@ try {
   Set-Content -Path (Join-Path $dist "ANVIL._pth") -Value $pth -Encoding ascii
   Set-Content -Path (Join-Path $dist "python$ver._pth") -Value $pth -Encoding ascii
   Copy-Item (Join-Path $root "THIRD_PARTY.md") $dist
+  Copy-Item (Join-Path $root "scripts\LIESMICH.txt") $dist
+  # Fail the build if a runtime DLL is missing (what users would otherwise see as a start error)
+  foreach ($need in @("ANVIL.exe", "anvil-cli.exe", "python$ver.dll", "python$ver.zip", "vcruntime140.dll", "msvcp140.dll", "Qt6Quick.dll")) {
+    if (-not (Test-Path (Join-Path $dist $need))) { throw "package incomplete: $need missing" }
+  }
   Write-Host "`nPackaged: $dist\ANVIL.exe" -ForegroundColor Green
 } finally {
   Pop-Location

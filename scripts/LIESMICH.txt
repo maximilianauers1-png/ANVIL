@@ -1,0 +1,21 @@
+ANVIL - lokales 3D-CAD (Milestone 1)
+====================================
+
+Starten:      ANVIL.exe   (Doppelklick). Keine Installation noetig.
+              Python, Qt und die Visual-C++-Laufzeit sind in diesem Ordner enthalten.
+Voraussetzung: NVIDIA-/AMD-/Intel-Treiber mit Vulkan 1.1+ (bei aktuellen Treibern immer der Fall).
+
+Bedienung:    Rechte Maustaste halten und ziehen = Radialmenue
+              Linke Maustaste ziehen = drehen, mittlere = verschieben, Rad = zoomen
+              Befehlszeile oben: Name tippen = Befehl suchen, "> " = Python
+Update:       Ordner durch eine neuere Version ersetzen. Einstellungen und
+              Sitzungen liegen unter %APPDATA%\ANVIL bzw. %LOCALAPPDATA%\ANVIL.
+
+Werkzeuge in diesem Ordner:
+  anvil-cli.exe magnet.py         Skript ohne Oberflaeche ausfuehren
+  anvil-bench.exe szene.stl       Kern-Benchmarks
+  ANVIL.exe --selftest ordner     Oberflaechen-Selbsttest mit Screenshots
+  ANVIL.exe --measure-startup t.txt   Kaltstartzeit messen
+
+Benchmarks (G1-G3) und Bauen aus dem Quellcode: siehe Repository,
+scripts\run-benchmarks.ps1 und docs\handbuch\M1_Demo.md.

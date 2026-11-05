@@ -37,9 +37,31 @@ if (Test-Path $vswhere) {
 Need "Visual Studio 2022 (C++ build tools)" ([bool]$vs) "winget install Microsoft.VisualStudio.2022.BuildTools --override '--add Microsoft.VisualStudio.Workload.VCTools --includeRecommended'"
 Need "CMake >= 3.24" ([bool](Get-Command cmake -ErrorAction SilentlyContinue)) "winget install Kitware.CMake"
 Need "Git" ([bool](Get-Command git -ErrorAction SilentlyContinue)) "winget install Git.Git"
+# Python >= 3.11 with headers and import libraries (python.org installer; the
+# Microsoft Store build lacks "libs" and cannot be used to build ANVIL).
 $py = $null
-try { $py = (& py -3.11 -c "import sys; print(sys.executable)") 2>$null } catch {}
-Need "Python 3.11 (py -3.11)" ([bool]$py) "winget install Python.Python.3.11"
+$pyProblem = "winget install Python.Python.3.11   (python.org build, not the Store app)"
+$candidates = @()
+if (Get-Command py -ErrorAction SilentlyContinue) {
+  foreach ($v in @("-3.11", "-3.12", "-3.13", "-3")) {
+    try { $p = (& py $v -c "import sys; print(sys.executable)") 2>$null; if ($p) { $candidates += $p } } catch {}
+  }
+}
+foreach ($c in @("python", "python3")) {
+  $cmd = Get-Command $c -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source -notmatch "WindowsApps") { $candidates += $cmd.Source }
+}
+foreach ($cand in ($candidates | Select-Object -Unique)) {
+  $info = & $cand (Join-Path $PSScriptRoot "check_python.py") 2>$null
+  if (-not $info) { continue }
+  $parts = $info.Split("|")
+  $ver = [version]$parts[0]
+  if ($ver -lt [version]"3.11") { $pyProblem = "found Python $ver at $cand, need >= 3.11"; continue }
+  if ($parts[1] -ne "True" -or $parts[2] -ne "True") { $pyProblem = "Python $ver at $cand has no development files (Store build?) - install from python.org"; continue }
+  $py = $cand
+  break
+}
+Need ("Python >= 3.11 with dev files" + $(if ($py) { " ($py)" } else { "" })) ([bool]$py) $pyProblem
 
 # GPU check (informational; ANVIL repeats it at every start)
 $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
@@ -62,7 +84,7 @@ if (-not (Test-Path (Join-Path $qtDir "bin\qmake.exe"))) {
     if ($a -ne "y") { Write-Host "Aborted."; exit 1 }
   }
   New-Item -ItemType Directory -Force -Path $deps | Out-Null
-  & py -3.11 -m venv (Join-Path $deps "aqt-venv")
+  & $py -m venv (Join-Path $deps "aqt-venv")
   $aqtPy = Join-Path $deps "aqt-venv\Scripts\python.exe"
   & $aqtPy -m pip install --quiet "aqtinstall==3.3.0"
   & $aqtPy -m aqt install-qt windows desktop $QtVersion $QtArch --outputdir (Join-Path $deps "Qt")
@@ -70,10 +92,10 @@ if (-not (Test-Path (Join-Path $qtDir "bin\qmake.exe"))) {
 Write-Host ("  [ok]   Qt " + $QtVersion + " at " + $qtDir) -ForegroundColor Green
 
 # numpy: only for the Python reference tests and the benchmark scene generator
-& py -3.11 -c "import numpy" 2>$null
+& $py -c "import numpy" 2>$null
 if ($LASTEXITCODE) {
-  $a = if ($Yes) { "y" } else { Read-Host "Install numpy (tests + benchmark scene) for Python 3.11 with pip --user? [y/N]" }
-  if ($a -eq "y") { & py -3.11 -m pip install --user --quiet numpy }
+  $a = if ($Yes) { "y" } else { Read-Host "Install numpy (tests + benchmark scene) with pip --user? [y/N]" }
+  if ($a -eq "y") { & $py -m pip install --user --quiet numpy }
 }
 
 # Remember paths for the build script

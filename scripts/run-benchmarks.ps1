@@ -18,7 +18,8 @@ if (-not (Test-Path $exe)) { throw "Build first: scripts\build-windows.ps1" }
 $out = Join-Path $root "bench\out"
 $scene = Join-Path $out "bs5m.stl"
 if (-not (Test-Path $scene)) {
-  & py -3.11 (Join-Path $root "bench\scene\generate_scene.py") --out $out
+  $py = if (Test-Path (Join-Path $root ".deps\env.json")) { (Get-Content (Join-Path $root ".deps\env.json") | ConvertFrom-Json).Python } else { "python" }
+  & $py (Join-Path $root "bench\scene\generate_scene.py") --out $out
 }
 $stamp = Get-Date -Format "yyyyMMdd-HHmm"
 $reports = Join-Path $root "bench\reports"
