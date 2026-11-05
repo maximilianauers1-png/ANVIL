@@ -523,23 +523,32 @@ Block load_block(const Grid& g, const Vec3& lo, const Vec3& hi) {
 }
 
 // Writes the inner bricks back; returns the bricks whose content changed.
+// Unchanged voxels are bit-identical floats (both copies came from the same
+// halfs), so changes are found without converting.
 std::vector<IVec3> store_block(Grid& g, const Block& B, const Block& before) {
     std::vector<IVec3> changed;
     for (int bz = 1; bz < B.nb.z - 1; ++bz)
         for (int by = 1; by < B.nb.y - 1; ++by)
             for (int bx = 1; bx < B.nb.x - 1; ++bx) {
-                std::array<std::uint16_t, kBrickVoxels> hv;
                 bool diff = false;
+                for (int z = 0; z < kBrick && !diff; ++z)
+                    for (int y = 0; y < kBrick && !diff; ++y)
+                        for (int x = 0; x < kBrick && !diff; ++x) {
+                            const int X = bx * kBrick + x, Y = by * kBrick + y, Z = bz * kBrick + z;
+                            diff = std::clamp(B.at(X, Y, Z), -kBand, kBand) != std::clamp(before.at(X, Y, Z), -kBand, kBand);
+                        }
+                if (!diff) continue;
+                std::array<std::uint16_t, kBrickVoxels> hv;
+                bool real = false;  // differences below half precision vanish on conversion
                 for (int z = 0; z < kBrick; ++z)
                     for (int y = 0; y < kBrick; ++y)
                         for (int x = 0; x < kBrick; ++x) {
                             const int X = bx * kBrick + x, Y = by * kBrick + y, Z = bz * kBrick + z;
-                            float v = std::clamp(B.at(X, Y, Z), -kBand, kBand);
-                            hv[Brick::index(x, y, z)] = float_to_half(v);
-                            if (hv[Brick::index(x, y, z)] != float_to_half(std::clamp(before.at(X, Y, Z), -kBand, kBand)))
-                                diff = true;
+                            const std::uint16_t nv = float_to_half(std::clamp(B.at(X, Y, Z), -kBand, kBand));
+                            hv[Brick::index(x, y, z)] = nv;
+                            real = real || nv != float_to_half(std::clamp(before.at(X, Y, Z), -kBand, kBand));
                         }
-                if (!diff) continue;
+                if (!real) continue;
                 IVec3 bc{B.b0.x + bx, B.b0.y + by, B.b0.z + bz};
                 g.mutable_brick(bc).v = hv;
                 changed.push_back(bc);
@@ -558,10 +567,13 @@ std::vector<IVec3> store_block(Grid& g, const Block& B, const Block& before) {
 void reinit(Block& B, IVec3 lo, IVec3 hi) {
     lo = {std::max(lo.x, 1), std::max(lo.y, 1), std::max(lo.z, 1)};
     hi = {std::min(hi.x, B.nx - 2), std::min(hi.y, B.ny - 2), std::min(hi.z, B.nz - 2)};
+    if (lo.x > hi.x || lo.y > hi.y || lo.z > hi.z) return;
     constexpr float kNear = 1.5f;
+    const std::size_t nz = std::size_t(hi.z - lo.z + 1);
     {
         const Block src = B;
-        for (int z = lo.z; z <= hi.z; ++z)
+        parallel_for(nz, [&](std::size_t iz) {  // each voxel reads only src: deterministic
+            const int z = lo.z + int(iz);
             for (int y = lo.y; y <= hi.y; ++y)
                 for (int x = lo.x; x <= hi.x; ++x) {
                     const float f = src.at(x, y, z);
@@ -575,15 +587,23 @@ void reinit(Block& B, IVec3 lo, IVec3 hi) {
                     const double gn = std::sqrt(gx * gx + gy * gy + gz * gz);
                     if (gn > 0.2) B.at(x, y, z) = float(f / gn);
                 }
+        });
     }
     static const float W[3] = {1.0f, 1.41421356f, 1.73205081f};
     for (int pass = 0; pass < 2; ++pass) {
         const Block src = B;
-        for (int z = lo.z; z <= hi.z; ++z)
+        parallel_for(nz, [&](std::size_t iz) {
+            const int z = lo.z + int(iz);
             for (int y = lo.y; y <= hi.y; ++y)
                 for (int x = lo.x; x <= hi.x; ++x) {
                     const float f = src.at(x, y, z);
                     if (std::abs(f) < kNear) continue;
+                    // far from the surface (clamped, face neighbours clamped): nothing to rebuild;
+                    // a 1-Lipschitz field cannot reach |f| < kBand - sqrt 2 diagonally from here
+                    if (std::abs(f) >= kBand && std::abs(src.at(x + 1, y, z)) >= kBand && std::abs(src.at(x - 1, y, z)) >= kBand &&
+                        std::abs(src.at(x, y + 1, z)) >= kBand && std::abs(src.at(x, y - 1, z)) >= kBand &&
+                        std::abs(src.at(x, y, z + 1)) >= kBand && std::abs(src.at(x, y, z - 1)) >= kBand)
+                        continue;
                     const bool neg = f < 0;
                     float best = kBand;
                     for (int dz = -1; dz <= 1; ++dz)
@@ -597,6 +617,7 @@ void reinit(Block& B, IVec3 lo, IVec3 hi) {
                             }
                     B.at(x, y, z) = neg ? -best : best;
                 }
+        });
     }
 }
 }  // namespace
@@ -652,19 +673,27 @@ void StrokeApplier::dab(const Vec3& cc, const Vec3& grab) {
     const double reach = R + (kBand + 1) * h + norm(grab);
     Block B = load_block(g_, cc - Vec3{reach, reach, reach}, cc + Vec3{reach, reach, reach});
     const Block before = B;
-    // sub-steps keep every update below half a voxel (the band stays valid)
+    // sub-steps keep every update below one voxel: the band (3 h) stays valid
+    // until the reinitialisation after the dab rebuilds it
     double amount = 0;
     if (brush_ == Brush::Draw || brush_ == Brush::Carve) amount = st * spacing_ / 4;  // mm per dab
     if (brush_ == Brush::Grab) amount = norm(grab);
-    const int sub = std::max(1, int(std::ceil(amount / (0.5 * h))));
+    const int sub = std::max(1, int(std::ceil(amount / h)));
     const Vec3 origin = Vec3{double(B.b0.x), double(B.b0.y), double(B.b0.z)} * (kBrick * h);
     const Vec3 pn = plane_n_;
     const double pd = plane_d_;
     for (int ss = 0; ss < sub; ++ss) {
         const Block src = B;
-        for (int z = 1; z < B.nz - 1; ++z)
-            for (int y = 1; y < B.ny - 1; ++y)
-                for (int x = 1; x < B.nx - 1; ++x) {
+        // voxels inside the dab's sphere bounding box (block coordinates)
+        const Vec3 cv = (cc - origin) / h;
+        const int rv = int(std::ceil(R / h)) + 1;
+        const int x0 = std::max(1, int(cv.x) - rv), x1 = std::min(B.nx - 2, int(cv.x) + rv);
+        const int y0 = std::max(1, int(cv.y) - rv), y1 = std::min(B.ny - 2, int(cv.y) + rv);
+        const int z0 = std::max(1, int(cv.z) - rv), z1 = std::min(B.nz - 2, int(cv.z) + rv);
+        parallel_for(std::size_t(std::max(0, z1 - z0 + 1)), [&](std::size_t iz) {
+          const int z = z0 + int(iz);
+          for (int y = y0; y <= y1; ++y)
+                for (int x = x0; x <= x1; ++x) {
                     const Vec3 p = origin + Vec3{double(x), double(y), double(z)} * h;
                     const double q = norm(p - cc) / R;
                     if (q >= 1.0) continue;
@@ -699,9 +728,12 @@ void StrokeApplier::dab(const Vec3& cc, const Vec3& grab) {
                         }
                     }
                 }
-        const int rv = int(std::ceil(reach / h));
+        });
+    }
+    {
+        const int rr = int(std::ceil(reach / h));
         const Vec3 cb = (cc - origin) / h;
-        reinit(B, {int(cb.x) - rv, int(cb.y) - rv, int(cb.z) - rv}, {int(cb.x) + rv, int(cb.y) + rv, int(cb.z) + rv});
+        reinit(B, {int(cb.x) - rr, int(cb.y) - rr, int(cb.z) - rr}, {int(cb.x) + rr, int(cb.y) + rr, int(cb.z) + rr});
     }
     for (const auto& b : store_block(g_, B, before)) touched_.insert(b), all_touched_.insert(b);
 }
