@@ -39,6 +39,9 @@ if(ANVIL_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-install(DIRECTORY python/anvil DESTINATION python
+# Only the "anvil" component is packaged (cmake --install ... --component anvil):
+# third-party projects built via FetchContent bring their own install rules
+# (headers, import libraries) that must not end up in dist\ANVIL.
+install(DIRECTORY python/anvil DESTINATION python COMPONENT anvil
         PATTERN "__pycache__" EXCLUDE)
-install(DIRECTORY examples DESTINATION .)
+install(DIRECTORY examples DESTINATION . COMPONENT anvil)

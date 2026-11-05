@@ -51,11 +51,8 @@ try {
 
   $dist = Join-Path $root "dist\ANVIL"
   if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
-  cmake --install build-win --prefix $dist
+  cmake --install build-win --prefix $dist --component anvil
   if ($LASTEXITCODE) { throw "install failed" }
-  # OCCT development files (headers, import libraries, CMake config) are not shipped
-  $occtDev = Join-Path $dist "occt-dev"
-  if (Test-Path $occtDev) { Remove-Item -Recurse -Force $occtDev }
   # OCCT license texts (LGPL-2.1 + exception) travel with the DLLs
   $lic = Join-Path $dist "licenses\OCCT"
   New-Item -ItemType Directory -Force -Path $lic | Out-Null

@@ -36,7 +36,7 @@ endif()
 add_executable(anvil-bench ${PROJECT_SOURCE_DIR}/bench/anvil_bench.cpp)
 target_link_libraries(anvil-bench PRIVATE anvil_core)
 anvil_warnings(anvil-bench)
-install(TARGETS anvil-bench RUNTIME DESTINATION .)
+install(TARGETS anvil-bench RUNTIME DESTINATION . COMPONENT anvil)
 
 # M2 acceptance (B-Rep kernel in the anvil-geom worker): features, STEP, crash isolation, parametric clamp.
 if(ANVIL_BUILD_GEOM)

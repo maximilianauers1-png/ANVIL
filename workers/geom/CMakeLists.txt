@@ -24,12 +24,6 @@ if(NOT OpenCASCADE_FOUND)
   set(USE_TBB OFF CACHE BOOL "" FORCE)
   set(USE_VTK OFF CACHE BOOL "" FORCE)
   set(BUILD_LIBRARY_TYPE "Shared" CACHE STRING "" FORCE)
-  set(INSTALL_DIR_BIN "." CACHE STRING "" FORCE)
-  # OCCT's own install rules: development files go to a folder the Windows
-  # packaging deletes; the runtime DLLs are installed below via anvil-geom.
-  foreach(_d INCLUDE LIB CMAKE RESOURCE DATA SAMPLES TESTS SCRIPT DOC)
-    set(INSTALL_DIR_${_d} "occt-dev/${_d}" CACHE STRING "" FORCE)
-  endforeach()
   FetchContent_Declare(occt
     GIT_REPOSITORY https://github.com/Open-Cascade-SAS/OCCT.git
     GIT_TAG ${ANVIL_OCCT_TAG}
@@ -55,12 +49,12 @@ if(MSVC)
   target_compile_options(anvil-geom PRIVATE /utf-8 /bigobj)
   target_compile_definitions(anvil-geom PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _USE_MATH_DEFINES)
 endif()
-install(TARGETS anvil-geom RUNTIME DESTINATION .)
+install(TARGETS anvil-geom RUNTIME DESTINATION . COMPONENT anvil)
 if(WIN32)
   # Windows finds DLLs next to the executable: copy the OCCT toolkits there in
   # the build tree (tests start the worker from there) and install them.
   add_custom_command(TARGET anvil-geom POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_RUNTIME_DLLS:anvil-geom> $<TARGET_FILE_DIR:anvil-geom>
     COMMAND_EXPAND_LISTS)
-  install(FILES $<TARGET_RUNTIME_DLLS:anvil-geom> DESTINATION .)
+  install(FILES $<TARGET_RUNTIME_DLLS:anvil-geom> DESTINATION . COMPONENT anvil)
 endif()
