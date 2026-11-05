@@ -1,0 +1,42 @@
+// Central tolerances (ADR 0006). Mirror: tests/reference/tolerances.py.
+// No tolerance literal may appear anywhere else in the code base.
+#pragma once
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+
+namespace anvil::tol {
+
+// --- Level 0: floating point arithmetic --------------------------------------
+// 16 ulp of double: comparisons of quantities produced by a handful of roundings.
+inline constexpr double kRelNumeric = 16.0 * 2.220446049250313e-16;
+// Absolute floor near zero (mm). 1 pm.
+inline constexpr double kAbsNumericMm = 1e-9;
+
+// --- Level 1: geometry kernel --------------------------------------------------
+// Point coincidence in model space (equals OCCT Precision::Confusion in mm).
+inline constexpr double kConfusionMm = 1e-7;
+// Degenerate triangle: area <= kDegenerateAreaRel * (bbox diagonal)^2.
+inline constexpr double kDegenerateAreaRel = 1e-14;
+// Self-intersection predicates: a signed distance below
+// kSelfIntersectRel * (local edge length) is treated as zero ("touching").
+inline constexpr double kSelfIntersectRel = 1e-9;
+// Feature edges for snapping/rendering: dihedral angle above this (rad).
+inline constexpr double kFeatureEdgeAngleRad = 20.0 * std::numbers::pi / 180.0;
+
+// --- Level 2: manufacturing ----------------------------------------------------
+// Default chord error for viewport tessellation and the STL export dialog (mm).
+// Equal values let the export reuse the viewport's cached meshes; 10 um is
+// below the XY pixel of current resin printers (ADR 0006, M1 update).
+inline constexpr double kDefaultChordMm = 0.01;
+inline constexpr double kDefaultExportChordMm = kDefaultChordMm;
+// Lower bound for user-provided chord errors (mm): below this the mesh explodes
+// without any printable benefit (resin XY pixels are ~18-50 um).
+inline constexpr double kMinChordMm = 1e-4;
+
+/// |a-b| <= max(abs, rel*max(|a|,|b|)) -- symmetric, unlike many isclose variants.
+inline bool close(double a, double b, double rel = kRelNumeric, double abs = kAbsNumericMm) {
+    return std::abs(a - b) <= std::max(abs, rel * std::max(std::abs(a), std::abs(b)));
+}
+
+}  // namespace anvil::tol

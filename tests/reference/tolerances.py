@@ -29,7 +29,7 @@ NEEDLE_ANGLE_RAD: float = math.radians(0.01)
 # --- Ebene 2: Fertigung -----------------------------------------------------
 # Default-Sehnenfehler für Tesselierung in Exports, falls der Nutzer nichts
 # vorgibt (mm). Resin-XY-Pixel liegen bei ~20–50 µm, also δ ≪ Pixel.
-DEFAULT_CHORD_MM: float = 0.005
+DEFAULT_CHORD_MM: float = 0.01  # M1: equal to the export default (ADR 0006)
 
 
 def close(a: float, b: float, rel: float = REL_NUMERIC, abs_: float = ABS_NUMERIC_MM) -> bool:
