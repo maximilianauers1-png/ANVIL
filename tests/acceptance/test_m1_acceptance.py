@@ -86,10 +86,9 @@ class Recovery(unittest.TestCase):
             rc, doc1, err = run(*args, cwd=d)
             self.assertEqual(rc, 1)  # the failing command
             # simulate a crash during one more command: append a txn without ok marker
-            with open(j, "a", encoding="utf-8") as f:
+            with open(j, "ab") as f:  # binary: the journal format uses LF on every platform
                 src = "show(sphere(d=1*mm))"
-                import zlib  # noqa: F401  (crc32c is computed below)
-                f.write(f"#@txn 99 ui crc={crc32c(src.encode()):08x} bytes={len(src)}\n{src}\n#@end 99\n")
+                f.write(f"#@txn 99 ui crc={crc32c(src.encode()):08x} bytes={len(src)}\n{src}\n#@end 99\n".encode())
             rc, doc2, err = run("--replay", j, "--print-doc", cwd=d)
             self.assertEqual(rc, 0, err)
             self.assertIn("unfinished (possible crash cause): show(sphere(d=1*mm))", doc2)

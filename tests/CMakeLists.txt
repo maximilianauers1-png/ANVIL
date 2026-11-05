@@ -7,6 +7,11 @@ catch_discover_tests(anvil_core_tests)
 # Python reference oracle (M0) stays part of the suite.
 add_test(NAME reference_python
          COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${PROJECT_SOURCE_DIR}/tests/reference)
+execute_process(COMMAND ${Python3_EXECUTABLE} -c "import numpy" RESULT_VARIABLE _np OUTPUT_QUIET ERROR_QUIET)
+if(NOT _np EQUAL 0)
+  message(WARNING "numpy not found for ${Python3_EXECUTABLE}: reference_python test disabled (pip install numpy)")
+  set_tests_properties(reference_python PROPERTIES DISABLED TRUE)
+endif()
 
 # M1 acceptance (script vs. UI command sequence, recovery, API suite).
 add_test(NAME acceptance_m1

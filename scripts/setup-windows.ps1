@@ -69,6 +69,13 @@ if (-not (Test-Path (Join-Path $qtDir "bin\qmake.exe"))) {
 }
 Write-Host ("  [ok]   Qt " + $QtVersion + " at " + $qtDir) -ForegroundColor Green
 
+# numpy: only for the Python reference tests and the benchmark scene generator
+& py -3.11 -c "import numpy" 2>$null
+if ($LASTEXITCODE) {
+  $a = if ($Yes) { "y" } else { Read-Host "Install numpy (tests + benchmark scene) for Python 3.11 with pip --user? [y/N]" }
+  if ($a -eq "y") { & py -3.11 -m pip install --user --quiet numpy }
+}
+
 # Remember paths for the build script
 @{ QtDir = $qtDir; Python = $py; VsPath = $vs } | ConvertTo-Json | Set-Content (Join-Path $deps "env.json")
 Write-Host "`nNext:  powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1" -ForegroundColor Cyan
