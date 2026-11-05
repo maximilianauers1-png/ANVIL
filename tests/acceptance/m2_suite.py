@@ -125,4 +125,28 @@ var("w", 35 * mm)
 bb = info("Clamp")["bbox"]
 assert abs((bb[1][1] - bb[0][1]) - 35) < 1e-6, f"clamp: width change propagates through the sketch, bbox {bb}"
 assert check("Clamp")["ok"], check("Clamp")["summary"]
+# --- streamlined one-step commands: polyline/solidify, masks, deform, dragging --------------
+show(box(x=40 * mm, y=30 * mm, z=1 * mm), name="Mask")
+sketch_polyline([(-15, -10), (-5, -10), (-5, 5), (10, 5), (10, 12)], plane="XY", offset=1 * mm, name="Trace")
+v0 = info("Mask")["volume"]
+cut_sketch("Trace", "Mask", depth=0.2 * mm, mode="solidify", width=0.5 * mm)
+removed = v0 - info("Mask")["volume"]
+# straight parts + round end caps; joins overlap, so the area lies between these bounds
+L = 10 + 15 + 15 + 7
+assert 0.2 * (0.5 * L) < removed < 0.2 * (0.5 * L + pi * 0.25 ** 2) + 1e-9, removed
+assert check("Mask")["ok"]
+sketch_circle((0, 0), r=10 * mm, name="Ring")
+solidify_sketch("Ring", width=2 * mm, height=5 * mm, name="Wall")
+close(info("Wall", chord=0.002 * mm)["volume"], pi * (11 ** 2 - 9 ** 2) * 5, 1e-3, "solidify ring")
+v_wall = info("Wall", chord=0.002 * mm)["volume"]
+deform_object("Wall", taper=0.7)
+close(info("Wall", chord=0.002 * mm)["volume"], v_wall * (1 - 0.3 + 0.09 / 3), 2e-3, "taper: V factor = int (1-0.3t)^2 dt")
+deform_object("Wall", twist=45 * deg)
+assert check("Wall")["ok"]
+sketch_rect((0, 0), (20, 10), name="R")
+sketch_move("R", "P3", 25 * mm, 12 * mm)
+extrude_sketch("R", 3 * mm, name="Dragged")
+close(info("Dragged")["volume"], 25 * 12 * 3, 1e-9, "dragged corner keeps the rectangle")
+k = sketch_dim("R", "length", "L1", "30 mm")
+close(info("Dragged")["volume"], 30 * 12 * 3, 1e-9, "dimension edits propagate to the extrusion")
 print("M2 SUITE OK")

@@ -180,7 +180,7 @@ NodeKind feature_kind(const std::string& k) {
         {"extrude", NodeKind::Extrude}, {"revolve", NodeKind::Revolve}, {"fillet", NodeKind::Fillet},
         {"chamfer", NodeKind::EdgeChamfer}, {"shell", NodeKind::Shell}, {"linear_pattern", NodeKind::LinearPattern},
         {"circular_pattern", NodeKind::CircularPattern}, {"loft", NodeKind::Loft}, {"sweep", NodeKind::Sweep},
-        {"step", NodeKind::StepImport}};
+        {"step", NodeKind::StepImport}, {"solidify", NodeKind::Solidify}, {"deform", NodeKind::Deform}};
     auto it = m.find(k);
     if (it == m.end()) throw std::invalid_argument("unknown feature '" + k + "'");
     return it->second;

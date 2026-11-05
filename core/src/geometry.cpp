@@ -9,6 +9,7 @@
 
 #include <manifold/manifold.h>
 #include <nlohmann/json.hpp>
+#include <clipper2/clipper.h>
 
 #include "anvil/sketch.hpp"
 #include "anvil/stl.hpp"
@@ -37,6 +38,8 @@ const char* node_kind_name(NodeKind k) {
         case NodeKind::Sweep: return "Sweep";
         case NodeKind::StepImport: return "Step";
         case NodeKind::Ref: return "Ref";
+        case NodeKind::Solidify: return "Solidify";
+        case NodeKind::Deform: return "Deform";
     }
     return "?";
 }
@@ -84,6 +87,16 @@ const std::vector<ParamSpec>& param_specs(NodeKind k) {
         {"n", kNone, 6, true, false, "number of copies (including the original)"},
         {"angle", kAngle, 2 * 3.14159265358979323846, true, false, "total angle about Z"}};
     static const std::vector<ParamSpec> loft{{"ruled", kNone, 0, false, true, "1 = straight (ruled) faces"}};
+    static const std::vector<ParamSpec> solidify{
+        {"width", kLength, 1, true, false, "wall / trace width"},
+        {"height", kLength, 1, true, false, "height along the sketch normal"}};
+    static const std::vector<ParamSpec> deform{
+        {"sx", kNone, 1, true, false, "stretch along X (factor)"},
+        {"sy", kNone, 1, true, false, "stretch along Y (factor)"},
+        {"sz", kNone, 1, true, false, "stretch along Z (factor)"},
+        {"taper", kNone, 1, true, false, "XY scale at the top relative to the bottom"},
+        {"twist", kAngle, 0, false, false, "rotation of the top relative to the bottom (about Z)"},
+        {"bend", kAngle, 0, false, false, "bend angle in the XZ plane over the X length"}};
     static const std::vector<ParamSpec> none;
     switch (k) {
         case NodeKind::Extrude: return extrude;
@@ -94,6 +107,8 @@ const std::vector<ParamSpec>& param_specs(NodeKind k) {
         case NodeKind::LinearPattern: return linpat;
         case NodeKind::CircularPattern: return circpat;
         case NodeKind::Loft: return loft;
+        case NodeKind::Solidify: return solidify;
+        case NodeKind::Deform: return deform;
         case NodeKind::Box: return box;
         case NodeKind::Cylinder: return cyl;
         case NodeKind::Sphere: return sph;
@@ -136,8 +151,10 @@ bool is_brep_kind(NodeKind k) {
 }
 
 const std::vector<std::string>& attr_names(NodeKind k) {
-    static const std::vector<std::string> edges{"edges"}, faces{"faces"}, step{"path", "sha256"}, ref{"name"}, none;
+    static const std::vector<std::string> edges{"edges"}, faces{"faces"}, step{"path", "sha256"}, ref{"name"},
+        solid{"ends", "join"}, none;
     switch (k) {
+        case NodeKind::Solidify: return solid;
         case NodeKind::Fillet: case NodeKind::EdgeChamfer: return edges;
         case NodeKind::Shell: return faces;
         case NodeKind::StepImport: return step;
@@ -363,7 +380,8 @@ std::string to_python(const NodePtr& n) {
                 {NodeKind::Extrude, "extrude"}, {NodeKind::Revolve, "revolve"}, {NodeKind::Fillet, "fillet"},
                 {NodeKind::EdgeChamfer, "chamfer_edges"}, {NodeKind::Shell, "shell"},
                 {NodeKind::LinearPattern, "pattern_linear"}, {NodeKind::CircularPattern, "pattern_circular"},
-                {NodeKind::Loft, "loft"}, {NodeKind::Sweep, "sweep"}};
+                {NodeKind::Loft, "loft"}, {NodeKind::Sweep, "sweep"}, {NodeKind::Solidify, "solidify"},
+                {NodeKind::Deform, "deform"}};
             o << fn.at(n->kind) << "(";
             bool first = true;
             for (const auto& in : n->inputs) o << (first ? "" : ", ") << to_python(in), first = false;
@@ -644,6 +662,77 @@ struct Evaluator {
                     }
                 }
                 return from_manifold(Manifold::BatchBoolean(parts, manifold::OpType::Add));
+            }
+            case NodeKind::Solidify: {
+                const NodePtr& skn = n->inputs[0]->kind == NodeKind::Ref ? deref(n->inputs[0]) : n->inputs[0];
+                if (skn->kind != NodeKind::Sketch) throw GeometryError("solidify needs a sketch");
+                Sketch solved = solve_sketch(*skn->sketch, vars).first;
+                double w = get(n, "width"), h = get(n, "height");
+                auto attr = [&](const char* k, const char* d) { return n->attrs.count(k) ? n->attrs.at(k) : std::string(d); };
+                std::string ends = attr("ends", "round"), join = attr("join", "round");
+                Clipper2Lib::JoinType jt = join == "miter" ? Clipper2Lib::JoinType::Miter : join == "square" ? Clipper2Lib::JoinType::Square : Clipper2Lib::JoinType::Round;
+                Clipper2Lib::EndType open_end = ends == "square" ? Clipper2Lib::EndType::Square
+                                              : ends == "flat" ? Clipper2Lib::EndType::Butt : Clipper2Lib::EndType::Round;
+                Clipper2Lib::PathsD open_paths, closed_paths;
+                for (const auto& c : sketch_chains(solved, set.chord_mm)) {
+                    Clipper2Lib::PathD p;
+                    for (auto [x, y] : c.pts) p.push_back({x, y});
+                    (c.closed ? closed_paths : open_paths).push_back(p);
+                }
+                if (open_paths.empty() && closed_paths.empty()) throw GeometryError("solidify: the sketch has no curves");
+                // arc tolerance from the chord error: round joins/ends honour the same sagitta bound
+                const int precision = 6;
+                Clipper2Lib::PathsD out;
+                if (!open_paths.empty())
+                    out = Clipper2Lib::InflatePaths(open_paths, w / 2, jt, open_end, 2.0, precision, set.chord_mm);
+                if (!closed_paths.empty()) {
+                    auto ring = Clipper2Lib::InflatePaths(closed_paths, w / 2, jt, Clipper2Lib::EndType::Joined, 2.0, precision, set.chord_mm);
+                    out = out.empty() ? ring : Clipper2Lib::Union(out, ring, Clipper2Lib::FillRule::NonZero, precision);
+                }
+                manifold::Polygons polys;
+                for (const auto& p : out) {
+                    manifold::SimplePolygon sp;
+                    for (const auto& q : p) sp.push_back({q.x, q.y});
+                    polys.push_back(sp);
+                }
+                Manifold m = Manifold::Extrude(polys, h);
+                Vec3 o, u, v, nn;
+                solved.frame(o, u, v, nn);
+                manifold::mat3x4 T({u.x, u.y, u.z}, {v.x, v.y, v.z}, {nn.x, nn.y, nn.z}, {o.x, o.y, o.z});
+                return from_manifold(m.Transform(T));
+            }
+            case NodeKind::Deform: {
+                auto src = eval(n->inputs[0]);
+                if (!src->solid) throw GeometryError("deform source is not a closed manifold: " + src->error);
+                double sx = get(n, "sx"), sy = get(n, "sy"), sz = get(n, "sz"), taper = get(n, "taper");
+                double twist = get(n, "twist"), bend = get(n, "bend");
+                Manifold m = src->solid->Scale({sx, sy, sz});
+                manifold::Box bb = m.BoundingBox();
+                const double x0 = bb.min.x, x1 = bb.max.x, z0 = bb.min.z, z1 = bb.max.z;
+                const double xc = (bb.min.x + bb.max.x) / 2, yc = (bb.min.y + bb.max.y) / 2;
+                const double H = std::max(z1 - z0, 1e-9), W = std::max(x1 - x0, 1e-9);
+                if (taper != 1 || twist != 0 || bend != 0) {
+                    // refine so the warp is resolved: edges no longer than the chord-based
+                    // length that keeps the sagitta of a full turn below the chord error
+                    double len = std::max(std::sqrt(8 * set.chord_mm * std::max(W, H)), std::max(W, H) / 400);
+                    m = m.RefineToLength(len);
+                    const double R = bend != 0 ? W / bend : 0;
+                    m = m.Warp([=](manifold::vec3& p) {
+                        double t = (p.z - z0) / H;
+                        double s = 1 + (taper - 1) * t;
+                        double a = twist * t;
+                        double dx = (p.x - xc) * s, dy = (p.y - yc) * s;
+                        p.x = xc + dx * std::cos(a) - dy * std::sin(a);
+                        p.y = yc + dx * std::sin(a) + dy * std::cos(a);
+                        if (bend != 0) {  // bend the X extent around an axis parallel to Y below the part
+                            double phi = (p.x - x0) / R - bend / 2;
+                            double r = R + (p.z - z0);
+                            p.x = xc + r * std::sin(phi);
+                            p.z = z0 - R + r * std::cos(phi);
+                        }
+                    });
+                }
+                return from_manifold(std::move(m));
             }
             case NodeKind::ImportedMesh: {
                 manifold::MeshGL64 g;

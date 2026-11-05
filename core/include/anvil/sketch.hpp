@@ -112,6 +112,14 @@ std::vector<ProfileFace> sketch_profiles(const Sketch& solved);
 /// Throws GeometryError if they do not form a single open chain.
 std::vector<ProfileSegment> sketch_path(const Sketch& solved);
 
+/// Every connected chain of non-construction curves as a polyline (arcs and
+/// circles sampled with `chord_mm`), open or closed. Used by Solidify.
+struct SketchChain {
+    std::vector<std::pair<double, double>> pts;
+    bool closed = false;
+};
+std::vector<SketchChain> sketch_chains(const Sketch& solved, double chord_mm);
+
 /// Polyline approximation of every non-construction curve (for display),
 /// world coordinates, as a line list in Mesh.V (F unused).
 Mesh sketch_lines(const Sketch& solved, double chord_mm, bool include_construction);

@@ -26,7 +26,9 @@ __all__ = [
     "subtract", "union", "intersect", "duplicate", "clear", "export_stl", "import_stl", "import_mesh",
     "check", "info", "save", "load", "Sketch", "extrude", "revolve", "fillet", "chamfer_edges", "shell",
     "pattern_linear", "pattern_circular", "loft", "sweep", "ref", "import_step", "import_step_solid",
-    "export_step", "view", "theme", "display", "select", "set_unit", "GeometryError",
+    "export_step", "solidify", "deform", "sketch_polyline", "sketch_rect", "sketch_circle", "extrude_sketch",
+    "cut_sketch", "solidify_sketch", "revolve_sketch", "sketch_move", "sketch_dim", "sketch_constrain",
+    "sketch_set", "sketch_delete", "deform_object", "cut_with", "view", "theme", "display", "select", "set_unit", "GeometryError",
 ]
 
 GeometryError = _a.GeometryError
@@ -35,6 +37,7 @@ _state = {"shown": False}  # whether show() ran in the current command (REPL con
 # --------------------------------------------------------------------------- params
 
 _PARAM_DIMS = {
+    "solidify": {"width": LENGTH, "height": LENGTH}, "deform": {"twist": ANGLE, "bend": ANGLE},
     "extrude": {"distance": LENGTH}, "revolve": {"angle": ANGLE}, "fillet": {"r": LENGTH},
     "chamfer": {"d": LENGTH}, "shell": {"t": LENGTH},
     "linear_pattern": {"dx": LENGTH, "dy": LENGTH, "dz": LENGTH}, "circular_pattern": {"angle": ANGLE},
@@ -76,6 +79,8 @@ def _params(kind: str, kw: dict) -> dict:
 
 
 def _node(x):
+    if isinstance(x, _a.Node):
+        return x
     if isinstance(x, Sketch):
         return x._node()
     if isinstance(x, Solid):
@@ -301,6 +306,23 @@ def loft(*sketches, ruled: bool = False) -> Solid:
 def sweep(profile, path) -> Solid:
     """Sweeps a closed profile sketch along an open path sketch."""
     return Solid(_a.make_feature("sweep", [_sk(profile), _sk(path)], {}, {}))
+
+
+def solidify(sketch, width=1 * mm, height=1 * mm, ends: str = "round", join: str = "round") -> Solid:
+    """Thickens every curve chain of a sketch into a wall of `width` and `height`
+    (open polylines become traces, closed ones rings). ends: round|square|flat,
+    join: round|miter|square. Ideal for masks, ribs, cable guides."""
+    if ends not in ("round", "square", "flat") or join not in ("round", "miter", "square"):
+        raise ValueError("solidify(): ends round|square|flat, join round|miter|square")
+    return Solid(_a.make_feature("solidify", [_sk(sketch)], _params("solidify", {"width": width, "height": height}),
+                                 {"ends": ends, "join": join}))
+
+
+def deform(solid, sx=1.0, sy=1.0, sz=1.0, taper=1.0, twist=0 * deg, bend=0 * deg) -> Solid:
+    """Stretch (sx, sy, sz factors), taper (top scale), twist and bend a solid."""
+    p = {k: (float(v), "") for k, v in (("sx", sx), ("sy", sy), ("sz", sz), ("taper", taper))}
+    p.update(_params("deform", {"twist": twist, "bend": bend}))
+    return Solid(_a.make_feature("deform", [_node(solid)], p, {}))
 
 
 def ref(name: str) -> Solid:
@@ -564,3 +586,172 @@ def select(*names):
 def set_unit(unit):
     """Display unit for all fields (does not change any stored value)."""
     _a.ui_request(_json.dumps({"request": "unit", "unit": _unit_symbol(unit)}))
+
+
+# --------------------------------------------------------------------------- one-step UI commands
+# Each is exactly one undoable command, so drawing and modelling in the UI stay
+# streamlined: draw -> one click -> solid.
+
+def _new_sketch(plane, offset) -> "Sketch":
+    return Sketch(plane, offset)
+
+
+def sketch_polyline(points, plane: str = "XY", offset=0 * mm, closed: bool = False, name: str = None) -> Obj:
+    """Draws a polyline sketch (corners shared, axis-aligned segments constrained)."""
+    s = _new_sketch(plane, offset)
+    s.polyline([(_c(x), _c(y)) for x, y in points], closed=closed)
+    return show(s._node_solved(), name=name)
+
+
+def sketch_rect(corner, opposite, plane: str = "XY", offset=0 * mm, name: str = None) -> Obj:
+    s = _new_sketch(plane, offset)
+    s.rect((_c(corner[0]), _c(corner[1])), (_c(opposite[0]), _c(opposite[1])))
+    return show(s._node_solved(), name=name)
+
+
+def sketch_circle(center, r, plane: str = "XY", offset=0 * mm, name: str = None) -> Obj:
+    s = _new_sketch(plane, offset)
+    s.circle((_c(center[0]), _c(center[1])), r=r)
+    return show(s._node_solved(), name=name)
+
+
+def _c(v) -> float:
+    return v.value if isinstance(v, Quantity) else float(v)
+
+
+def _sketch_of(name: str) -> "Sketch":
+    node = _a.get(name)
+    if node.kind != "Sketch":
+        raise TypeError(f"'{name}' is not a sketch")
+    return Sketch._from_node(node)
+
+
+def _derived_name(prefix: str) -> str:
+    return _a.unique_name(prefix)
+
+
+def extrude_sketch(sketch: str, distance=5 * mm, symmetric: bool = False, name: str = None) -> Obj:
+    """Extrudes a sketch object into a new solid; the sketch stays editable (and hidden)."""
+    o = show(extrude(ref(sketch), distance, symmetric), name=name or _derived_name("Extrude"))
+    hide(sketch)
+    return o
+
+
+def revolve_sketch(sketch: str, angle=360 * deg, axis: str = "v", name: str = None) -> Obj:
+    o = show(revolve(ref(sketch), angle, axis), name=name or _derived_name("Revolve"))
+    hide(sketch)
+    return o
+
+
+def solidify_sketch(sketch: str, width=1 * mm, height=1 * mm, ends: str = "round", join: str = "round",
+                    name: str = None) -> Obj:
+    o = show(solidify(ref(sketch), width, height, ends, join), name=name or _derived_name("Solid"))
+    hide(sketch)
+    return o
+
+
+def _through_depth(target: str) -> Quantity:
+    (x0, y0, z0), (x1, y1, z1) = info(target)["bbox"]
+    return 4 * max(x1 - x0, y1 - y0, z1 - z0, 1.0) * mm
+
+
+_PLANE_NORMAL = {"XY": (0, 0, 1), "XZ": (0, -1, 0), "YZ": (1, 0, 0)}
+
+
+def cut_sketch(sketch: str, target: str, depth=None, mode: str = "extrude", width=1 * mm) -> Obj:
+    """Cuts the sketch's profiles out of `target`.
+    depth None: through everything (symmetric about the sketch plane); a depth
+    cuts from the sketch plane into the material (against the plane normal,
+    e.g. down from a top face). mode='solidify' cuts the curves as traces of
+    `width` (masks, grooves, engravings)."""
+    through = depth is None
+    d = _through_depth(target) if through else depth
+    if mode == "solidify":
+        tool = solidify(ref(sketch), width, d)
+    elif mode == "extrude":
+        tool = extrude(ref(sketch), d)
+    else:
+        raise ValueError("cut_sketch(mode=...): 'extrude' or 'solidify'")
+    nx, ny, nz = _PLANE_NORMAL[_sketch_of(sketch).plane]
+    k = 0.5 if through else 1.0  # shift back along the normal: centred (through) or fully below the plane
+    tool = transform(tool, tx=-nx * k * d, ty=-ny * k * d, tz=-nz * k * d)
+    _a.set_root(target, _a.make_boolean("difference", _a.get(target), tool._node))
+    hide(sketch)
+    return Obj(target)
+
+
+def cut_with(target: str, *tools: str) -> Obj:
+    """target minus each tool (tools are consumed) - the radial 'Cut with...' action."""
+    return subtract(target, *tools)
+
+
+def sketch_move(sketch: str, point: str, x, y) -> None:
+    """Drags a sketch point; the solver keeps every constraint satisfied."""
+    s = _sketch_of(sketch)
+    k = s._id("K")
+    s.constraints[k] = ("fix", [point], _val_len(x), _val_len(y))
+    s.solve()
+    del s.constraints[k]
+    _a.set_root(sketch, s._node())
+
+
+def _val_len(v) -> tuple:
+    if isinstance(v, Quantity):
+        return (v.value, "")
+    return (float(v), "")
+
+
+def sketch_dim(sketch: str, kind: str, *refs_and_value) -> str:
+    s = _sketch_of(sketch)
+    k = s.dim(kind, *refs_and_value)
+    s.solve()
+    _a.set_root(sketch, s._node())
+    return k
+
+
+def sketch_constrain(sketch: str, kind: str, *refs) -> str:
+    s = _sketch_of(sketch)
+    k = s.fix(refs[0]) if kind == "fix" else s.constrain(kind, *refs)
+    s.solve()
+    _a.set_root(sketch, s._node())
+    return k
+
+
+def sketch_set(sketch: str, constraint: str, value) -> None:
+    """Changes a dimension's value (quantity or expression); geometry follows."""
+    s = _sketch_of(sketch)
+    kind, refs, _, b = s.constraints[constraint]
+    from .sketch import _val
+    s.constraints[constraint] = (kind, refs, _val(value, kind), b)
+    s.solve()
+    _a.set_root(sketch, s._node())
+
+
+def sketch_delete(sketch: str, *ids) -> None:
+    s = _sketch_of(sketch)
+    for i in ids:
+        if i in s.constraints:
+            del s.constraints[i]
+        elif i in s.curves:
+            del s.curves[i]
+            s.constraints = {k: c for k, c in s.constraints.items() if i not in c[1]}
+        elif i in s.points:
+            dead = [c for c, v in s.curves.items() if i in v[1]]
+            for c in dead:
+                del s.curves[c]
+            del s.points[i]
+            s.constraints = {k: c for k, c in s.constraints.items() if i not in c[1] and not set(dead) & set(c[1])}
+    _a.set_root(sketch, s._node())
+
+
+def deform_object(name: str, **params) -> Obj:
+    """Adds (or edits) a deformation of an object: sx, sy, sz, taper, twist, bend."""
+    node = _a.get(name)
+    if node.kind == "Deform":
+        p = {}
+        for k, v in params.items():
+            p[k] = _params("deform", {k: v})[k] if k in ("twist", "bend") else (float(v), "")
+        _a.edit(name, "", p)
+    else:
+        _a.set_root(name, deform(Solid(node), **params)._node)
+    return Obj(name)

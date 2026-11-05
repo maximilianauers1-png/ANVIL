@@ -44,6 +44,8 @@ enum class NodeKind {
     Sweep,         // in: profile sketch, path sketch
     StepImport,    // attr "path", "sha256"
     Ref,           // attr "name": the current root of another object (parametric link)
+    Solidify,      // in: sketch; thickens every chain to a wall (mesh kernel, Clipper2)
+    Deform,        // in: solid; stretch / taper / twist / bend (mesh kernel)
 };
 enum class BoolOp { Union, Difference, Intersection };
 

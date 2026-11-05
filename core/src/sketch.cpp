@@ -681,6 +681,64 @@ std::vector<ProfileSegment> sketch_path(const Sketch& s) {
     return out;
 }
 
+std::vector<SketchChain> sketch_chains(const Sketch& s, double chord) {
+    struct Seg { std::vector<std::pair<double, double>> pts; bool used = false; };
+    std::vector<Seg> segs;
+    std::vector<SketchChain> out;
+    for (const auto& [id, c] : s.curves) {
+        if (c.construction) continue;
+        const auto& p0 = s.points.at(c.pts[0]);
+        if (c.kind == CurveKind::Line) {
+            const auto& p1 = s.points.at(c.pts[1]);
+            segs.push_back({{{p0.x, p0.y}, {p1.x, p1.y}}});
+            continue;
+        }
+        double r = c.radius, a0 = 0, sweep = 2 * std::numbers::pi;
+        if (c.kind == CurveKind::Arc) {
+            const auto &st = s.points.at(c.pts[1]), &en = s.points.at(c.pts[2]);
+            r = std::hypot(st.x - p0.x, st.y - p0.y);
+            a0 = std::atan2(st.y - p0.y, st.x - p0.x);
+            sweep = std::fmod(std::atan2(en.y - p0.y, en.x - p0.x) - a0 + 4 * std::numbers::pi, 2 * std::numbers::pi);
+        }
+        if (!(r > 0)) continue;
+        int n = std::max(3, int(std::ceil(circle_segments(r, chord) * sweep / (2 * std::numbers::pi))));
+        Seg g;
+        for (int i = 0; i <= n; ++i) {
+            if (c.kind == CurveKind::Circle && i == n) break;
+            double t = a0 + sweep * i / n;
+            g.pts.push_back({p0.x + r * std::cos(t), p0.y + r * std::sin(t)});
+        }
+        if (c.kind == CurveKind::Circle) out.push_back({g.pts, true});
+        else segs.push_back(g);
+    }
+    auto same = [](std::pair<double, double> a, std::pair<double, double> b) {
+        return std::hypot(a.first - b.first, a.second - b.second) < kLoopJoinMm;
+    };
+    for (std::size_t i = 0; i < segs.size(); ++i) {
+        if (segs[i].used) continue;
+        segs[i].used = true;
+        std::vector<std::pair<double, double>> chain = segs[i].pts;
+        bool grew = true;
+        while (grew) {  // extend at both ends
+            grew = false;
+            for (auto& t : segs) {
+                if (t.used) continue;
+                if (same(chain.back(), t.pts.front())) chain.insert(chain.end(), t.pts.begin() + 1, t.pts.end());
+                else if (same(chain.back(), t.pts.back())) chain.insert(chain.end(), t.pts.rbegin() + 1, t.pts.rend());
+                else if (same(chain.front(), t.pts.back())) chain.insert(chain.begin(), t.pts.begin(), t.pts.end() - 1);
+                else if (same(chain.front(), t.pts.front())) chain.insert(chain.begin(), t.pts.rbegin(), t.pts.rend() - 1);
+                else continue;
+                t.used = true;
+                grew = true;
+            }
+        }
+        bool closed = chain.size() > 2 && same(chain.front(), chain.back());
+        if (closed) chain.pop_back();
+        out.push_back({chain, closed});
+    }
+    return out;
+}
+
 Mesh sketch_lines(const Sketch& s, double chord, bool construction) {
     Mesh m;
     auto add = [&](double x0, double y0, double x1, double y1) {

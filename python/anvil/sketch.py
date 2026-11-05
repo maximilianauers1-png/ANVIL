@@ -96,6 +96,10 @@ class Sketch:
     def _node(self):
         return _a.make_sketch(self._dict())
 
+    def _node_solved(self):
+        node, _ = _a.sketch_solve(self._node())
+        return node
+
     @classmethod
     def _from_node(cls, node) -> "Sketch":
         d = _a.sketch_dict(node)
