@@ -19,6 +19,9 @@ constexpr int kMaxIterations = 200;
 constexpr double kRankRel = 1e-9;           // singular values below rel*sigma_max count as zero
 constexpr double kNullComponent = 1e-6;     // null-space row norm marking a free variable
 constexpr double kLoopJoinMm = 1e-6;        // endpoints closer than this form a profile vertex
+constexpr double kNewtonMuRel = 1e-12;      // regularisation of J J^T, relative to its largest diagonal entry
+constexpr double kMinStep = 1e-4;           // smallest backtracking fraction of the Newton step
+constexpr double kArmijo = 1e-4;            // sufficient decrease: ||f_new||^2 < (1 - kArmijo*alpha) ||f||^2
 }  // namespace
 
 // ---------------------------------------------------------------- names
@@ -328,7 +331,20 @@ class System {
     std::vector<std::string> owner_;  // row -> constraint id
 };
 
-/// Levenberg-Marquardt with Marquardt scaling; returns max |residual|.
+/// Nonlinear least squares for sketch constraints; returns max |residual|.
+///
+/// Primary step: minimum-norm Gauss-Newton (pseudo-inverse Newton),
+///     dq = -J^T (J J^T + mu I)^{-1} f,
+/// i.e. the smallest change of the geometry that satisfies the linearised
+/// constraints J dq = -f. Sketches are usually under-determined (m < n); for
+/// full row rank J this converges quadratically (Ben-Israel 1966, "A Newton-
+/// Raphson method for the solution of systems of equations") and moves
+/// unconstrained geometry as little as possible, which is what dragging needs.
+/// mu (relative 1e-12 of the largest diagonal entry) only regularises
+/// redundant rows. The step is globalised by backtracking on ||f||^2.
+/// Fallback when the Newton direction does not decrease ||f|| (conflicting
+/// constraints, far from a solution): Levenberg-Marquardt with Marquardt
+/// scaling D = diag(J^T J).
 double lm_solve(const System& sys, Vec& q, int* iterations = nullptr) {
     if (!sys.m()) return 0.0;
     Vec f = sys.residual(q);
@@ -336,6 +352,26 @@ double lm_solve(const System& sys, Vec& q, int* iterations = nullptr) {
     int it = 0;
     for (; it < kMaxIterations && f.lpNorm<Eigen::Infinity>() > kSolveTolMm; ++it) {
         Eigen::MatrixXd J = sys.jacobian(q);
+        const double f2 = f.squaredNorm();
+        // --- minimum-norm Gauss-Newton with backtracking
+        {
+            Eigen::MatrixXd JJt = J * J.transpose();
+            double mu = kNewtonMuRel * std::max(1.0, JJt.diagonal().maxCoeff());
+            JJt.diagonal().array() += mu;
+            Vec dq = -J.transpose() * JJt.ldlt().solve(f);
+            bool accepted = false;
+            for (double alpha = 1.0; alpha > kMinStep; alpha *= 0.5) {
+                Vec qn = q + alpha * dq;
+                Vec fn = sys.residual(qn);
+                if (fn.squaredNorm() < f2 * (1 - kArmijo * alpha)) {
+                    q = qn, f = fn;
+                    accepted = true;
+                    break;
+                }
+            }
+            if (accepted) continue;
+        }
+        // --- Levenberg-Marquardt fallback
         Eigen::MatrixXd A = J.transpose() * J;
         Vec g = J.transpose() * f;
         Vec D = A.diagonal().cwiseMax(1e-12 * std::max(1.0, A.diagonal().maxCoeff()));
@@ -346,7 +382,7 @@ double lm_solve(const System& sys, Vec& q, int* iterations = nullptr) {
             Vec dq = M.ldlt().solve(-g);
             Vec qn = q + dq;
             Vec fn = sys.residual(qn);
-            if (fn.squaredNorm() < f.squaredNorm()) {
+            if (fn.squaredNorm() < f2) {
                 q = qn, f = fn;
                 lambda = std::max(lambda / 3, 1e-12);
                 improved = true;
@@ -362,7 +398,7 @@ double lm_solve(const System& sys, Vec& q, int* iterations = nullptr) {
 
 }  // namespace
 
-std::pair<Sketch, SolveStatus> solve_sketch(const Sketch& s, const VariableResolver& vars) {
+std::pair<Sketch, SolveStatus> solve_sketch(const Sketch& s, const VariableResolver& vars, bool analyze) {
     SolveStatus st;
     Layout L = make_layout(s);
     // validate references and resolve values
@@ -404,9 +440,11 @@ std::pair<Sketch, SolveStatus> solve_sketch(const Sketch& s, const VariableResol
     st.converged = st.residual <= kSolveTolMm * 10;
 
     // --- DOF analysis (SVD of J at the solution) ---------------------------------
-    if (L.n > 0) {
+    // BDCSVD (divide and conquer) falls back to one-sided Jacobi for small
+    // matrices and is O(n^3) with a much smaller constant for large ones.
+    if (analyze && L.n > 0) {
         Eigen::MatrixXd J = sys.m() ? sys.jacobian(q) : Eigen::MatrixXd::Zero(1, L.n);
-        Eigen::JacobiSVD<Eigen::MatrixXd> svd(J, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        Eigen::BDCSVD<Eigen::MatrixXd> svd(J, Eigen::ComputeFullU | Eigen::ComputeFullV);
         const Vec& sv = svd.singularValues();
         double smax = sv.size() ? sv[0] : 0;
         int rank = 0;
@@ -439,7 +477,7 @@ std::pair<Sketch, SolveStatus> solve_sketch(const Sketch& s, const VariableResol
     // Conflicts: at a least-squares compromise the geometry is distorted and the
     // SVD shows no dependency, so find the constraints whose removal lets the
     // rest converge (leave-one-out; sketches are small).
-    if (!st.converged && s.constraints.size() <= 200) {
+    if (analyze && !st.converged && s.constraints.size() <= 200) {
         std::vector<std::string> culprits;
         for (const auto& [id, c] : s.constraints) {
             Sketch t = s;
@@ -465,6 +503,7 @@ std::pair<Sketch, SolveStatus> solve_sketch(const Sketch& s, const VariableResol
     std::ostringstream msg;
     if (!st.message.empty()) msg << st.message;
     else if (!st.converged) msg << "constraints conflict (residual " << st.residual << ")";
+    else if (!analyze) msg << "solved";
     else if (st.dof == 0) msg << "fully constrained";
     else msg << st.dof << " degree(s) of freedom left";
     st.message = msg.str();

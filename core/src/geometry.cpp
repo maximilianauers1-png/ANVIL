@@ -534,7 +534,7 @@ struct Evaluator {
         std::ostringstream o;
         o << node_kind_name(n->kind) << "|chord=" << repr_double(set.chord_mm);
         for (const auto& [k, v] : n->attrs) o << "|" << k << "=" << v;
-        if (n->kind == NodeKind::Sketch) o << "|" << sketch_to_python(solve_sketch(*n->sketch, vars).first);
+        if (n->kind == NodeKind::Sketch) o << "|" << sketch_to_python(solve_sketch(*n->sketch, vars, false).first);
         if (n->kind == NodeKind::Boolean) o << "|op=" << int(n->op);
         if (n->kind == NodeKind::ImportedMesh) o << "|mesh=" << n->source_sha256 << "|" << n->mesh.get();
         for (const auto& s : param_specs(n->kind))
@@ -652,7 +652,7 @@ struct Evaluator {
             }
             case NodeKind::Sketch: {
                 auto sh = std::make_shared<Shape>();
-                auto solved = solve_sketch(*n->sketch, vars);
+                auto solved = solve_sketch(*n->sketch, vars, false);
                 sh->mesh = std::make_shared<Mesh>();
                 sh->lines = std::make_shared<Mesh>(sketch_lines(solved.first, set.chord_mm, true));
                 sh->error = "a sketch is not a solid (extrude or revolve it)";
@@ -683,7 +683,7 @@ struct Evaluator {
             case NodeKind::Solidify: {
                 const NodePtr& skn = n->inputs[0]->kind == NodeKind::Ref ? deref(n->inputs[0]) : n->inputs[0];
                 if (skn->kind != NodeKind::Sketch) throw GeometryError("solidify needs a sketch");
-                Sketch solved = solve_sketch(*skn->sketch, vars).first;
+                Sketch solved = solve_sketch(*skn->sketch, vars, false).first;
                 double w = get(n, "width"), h = get(n, "height");
                 auto attr = [&](const char* k, const char* d) { return n->attrs.count(k) ? n->attrs.at(k) : std::string(d); };
                 std::string ends = attr("ends", "round"), join = attr("join", "round");
@@ -818,7 +818,7 @@ std::string brep_json(const NodePtr& root, const VariableResolver& vars, const E
         if (n->kind == NodeKind::Boolean) j["op"] = n->op == BoolOp::Union ? "union" : n->op == BoolOp::Difference ? "difference" : "intersection";
         if (!n->attrs.empty()) j["a"] = n->attrs;
         if (n->kind == NodeKind::Sketch) {
-            auto solved = solve_sketch(*n->sketch, vars).first;
+            auto solved = solve_sketch(*n->sketch, vars, false).first;
             Vec3 o, u, v, nn;
             solved.frame(o, u, v, nn);
             j["origin"] = {o.x, o.y, o.z}, j["u"] = {u.x, u.y, u.z}, j["v"] = {v.x, v.y, v.z}, j["n"] = {nn.x, nn.y, nn.z};

@@ -53,6 +53,14 @@ try {
   if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
   cmake --install build-win --prefix $dist
   if ($LASTEXITCODE) { throw "install failed" }
+  # OCCT development files (headers, import libraries, CMake config) are not shipped
+  $occtDev = Join-Path $dist "occt-dev"
+  if (Test-Path $occtDev) { Remove-Item -Recurse -Force $occtDev }
+  # OCCT license texts (LGPL-2.1 + exception) travel with the DLLs
+  $lic = Join-Path $dist "licenses\OCCT"
+  New-Item -ItemType Directory -Force -Path $lic | Out-Null
+  Get-ChildItem (Join-Path $root "build-win\_deps") -Recurse -Include "LICENSE_LGPL_21.txt", "OCCT_LGPL_EXCEPTION.txt" -ErrorAction SilentlyContinue |
+    Select-Object -First 2 | ForEach-Object { Copy-Item $_.FullName $lic }
 
   # Qt runtime (dynamically linked, LGPL: DLLs stay replaceable)
   & (Join-Path $env:QT_ROOT_DIR "bin\windeployqt.exe") --release --no-translations --no-system-d3d-compiler `
@@ -87,7 +95,7 @@ try {
   Copy-Item (Join-Path $root "THIRD_PARTY.md") $dist
   Copy-Item (Join-Path $root "scripts\LIESMICH.txt") $dist
   # Fail the build if a runtime DLL is missing (what users would otherwise see as a start error)
-  foreach ($need in @("ANVIL.exe", "anvil-cli.exe", "python$ver.dll", "python$ver.zip", "vcruntime140.dll", "msvcp140.dll", "Qt6Quick.dll")) {
+  foreach ($need in @("ANVIL.exe", "anvil-cli.exe", "python$ver.dll", "python$ver.zip", "vcruntime140.dll", "msvcp140.dll", "Qt6Quick.dll", "anvil-geom.exe", "TKernel.dll")) {
     if (-not (Test-Path (Join-Path $dist $need))) { throw "package incomplete: $need missing" }
   }
   Write-Host "`nPackaged: $dist\ANVIL.exe" -ForegroundColor Green

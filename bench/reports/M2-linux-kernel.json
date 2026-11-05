@@ -1,0 +1,51 @@
+{
+ "first_exact_eval_incl_worker_start_ms": 20.638654999856954,
+ "extrude rectangle (B-Rep, IPC, tessellation)": {
+  "median_ms": 2.6105689998985326,
+  "min_ms": 2.453790999879857,
+  "max_ms": 2.774342000066099,
+  "n": 5
+ },
+ "fillet all 12 edges of a box r=2 mm": {
+  "median_ms": 28.4420240000145,
+  "min_ms": 24.007221999909234,
+  "max_ms": 35.1054769998882,
+  "n": 5
+ },
+ "shell box 1 mm, open top": {
+  "median_ms": 13.46964599997591,
+  "min_ms": 10.483743000349932,
+  "max_ms": 14.62330699996528,
+  "n": 5
+ },
+ "sketch solve: 13-gon, H/V + 5 lengths + fix": {
+  "median_ms": 0.5142280001564359,
+  "min_ms": 0.48568199963483494,
+  "max_ms": 0.7782440002301882,
+  "n": 5
+ },
+ "sketch solve: 43-gon, H/V + 20 lengths + fix": {
+  "median_ms": 5.257774000256177,
+  "min_ms": 4.395100000238017,
+  "max_ms": 5.312564000178099,
+  "n": 5
+ },
+ "sketch solve: 103-gon, H/V + 50 lengths + fix": {
+  "median_ms": 33.38028799998938,
+  "min_ms": 25.620521000291774,
+  "max_ms": 35.96429200024431,
+  "n": 5
+ },
+ "solidify 400-segment trace (Clipper2 + extrude)": {
+  "median_ms": 58.66712800025198,
+  "min_ms": 57.46587299972816,
+  "max_ms": 60.944785000174306,
+  "n": 5
+ },
+ "mixed boolean: fillet plate (B-Rep) - solidify (mesh)": {
+  "median_ms": 7.88154800011398,
+  "min_ms": 7.470766999631451,
+  "max_ms": 9.189417000015965,
+  "n": 5
+ }
+}

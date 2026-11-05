@@ -83,7 +83,9 @@ struct SolveStatus {
 
 /// Solves the sketch (constraint values resolved with `vars`), starting from
 /// the stored positions. Returns the solved sketch and the analysis.
-std::pair<Sketch, SolveStatus> solve_sketch(const Sketch& s, const VariableResolver& vars);
+/// `analyze` = false skips the DOF/conflict analysis (SVD, leave-one-out):
+/// geometry evaluation only needs the solved positions.
+std::pair<Sketch, SolveStatus> solve_sketch(const Sketch& s, const VariableResolver& vars, bool analyze = true);
 
 /// Closed profile loops of the (solved) sketch, as 2D segments.
 struct ProfileSegment {
