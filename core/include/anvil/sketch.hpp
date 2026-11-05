@@ -108,6 +108,10 @@ struct ProfileFace {
 /// Throws GeometryError with a precise message for open or branching profiles.
 std::vector<ProfileFace> sketch_profiles(const Sketch& solved);
 
+/// The non-construction curves as one open chain (sweep path), in order.
+/// Throws GeometryError if they do not form a single open chain.
+std::vector<ProfileSegment> sketch_path(const Sketch& solved);
+
 /// Polyline approximation of every non-construction curve (for display),
 /// world coordinates, as a line list in Mesh.V (F unused).
 Mesh sketch_lines(const Sketch& solved, double chord_mm, bool include_construction);

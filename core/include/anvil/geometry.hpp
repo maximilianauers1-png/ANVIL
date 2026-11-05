@@ -1,5 +1,6 @@
 // Feature nodes (immutable DAG) and their evaluation with Manifold (ADR 0003/0004).
 #pragma once
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -28,7 +29,22 @@ struct Param {
     bool operator==(const Param&) const = default;
 };
 
-enum class NodeKind { Box, Cylinder, Sphere, Torus, Boolean, Transform, ImportedMesh };
+enum class NodeKind {
+    // M1 (mesh kernel, Manifold)
+    Box, Cylinder, Sphere, Torus, Boolean, Transform, ImportedMesh,
+    // M2
+    Sketch,        // 2D constrained sketch (no volume; drawn as lines)
+    Extrude,       // in: sketch
+    Revolve,       // in: sketch
+    Fillet,        // in: solid; attr "edges"
+    EdgeChamfer,   // in: solid; attr "edges"
+    Shell,         // in: solid; attr "faces"
+    LinearPattern, CircularPattern,  // in: solid
+    Loft,          // in: >= 2 sketches
+    Sweep,         // in: profile sketch, path sketch
+    StepImport,    // attr "path", "sha256"
+    Ref,           // attr "name": the current root of another object (parametric link)
+};
 enum class BoolOp { Union, Difference, Intersection };
 
 const char* node_kind_name(NodeKind k);  // "Box", "Cylinder", ...
@@ -46,6 +62,10 @@ const std::vector<ParamSpec>& param_specs(NodeKind k);
 
 struct Node;
 using NodePtr = std::shared_ptr<const Node>;
+struct Sketch;
+
+/// Kinds that need the exact B-Rep kernel (OpenCASCADE, in the anvil-geom worker).
+bool is_brep_kind(NodeKind k);
 
 struct Node {
     NodeKind kind = NodeKind::Box;
@@ -57,8 +77,11 @@ struct Node {
     std::string source_path;
     std::string source_sha256;
     LengthUnit source_unit = LengthUnit::Millimeter;
+    // M2
+    std::map<std::string, std::string> attrs;  // non-numeric attributes (edge selector, ref name, ...)
+    std::shared_ptr<const Sketch> sketch;      // Sketch nodes
 
-    /// Child by path element: "a"/"b" (Boolean), "src" (Transform).
+    /// Child by path element: "a"/"b" (Boolean), "src" (Transform, features), "0".."n" (Loft/Sweep).
     NodePtr child(const std::string& elem) const;
     std::vector<std::string> child_names() const;
 };
@@ -68,6 +91,13 @@ NodePtr make_primitive(NodeKind k, std::map<std::string, Param> params);
 NodePtr make_boolean(BoolOp op, NodePtr a, NodePtr b);
 NodePtr make_transform(NodePtr src, std::map<std::string, Param> params);
 NodePtr make_imported(std::shared_ptr<const Mesh> mesh, std::string path, std::string sha256, LengthUnit unit);
+NodePtr make_sketch(std::shared_ptr<const Sketch> s);
+/// Generic feature node (Extrude, Fillet, ...): validates parameter and attribute names.
+NodePtr make_feature(NodeKind k, std::vector<NodePtr> inputs, std::map<std::string, Param> params,
+                     std::map<std::string, std::string> attrs);
+NodePtr make_ref(const std::string& object_name);
+/// Allowed attribute names per kind.
+const std::vector<std::string>& attr_names(NodeKind k);
 
 /// Returns a copy of `root` where the node at `path` ("" = root, "a/b/src")
 /// has `params` merged in. Throws GeometryError for unknown paths/params.
@@ -96,13 +126,29 @@ struct AnalyticFeatures {
 
 struct Shape {
     std::shared_ptr<const manifold::Manifold> solid;  // null if the mesh is not a closed manifold
-    std::shared_ptr<const Mesh> mesh;                 // always present
+    std::shared_ptr<const Mesh> mesh;                 // always present (empty for sketches)
+    std::shared_ptr<const Mesh> lines;                // sketches: line list (pairs of vertices)
     std::string error;                                // why `solid` is null
+    bool brep = false;                                // evaluated by the exact B-Rep kernel
 };
 
+/// Object name -> current root node (for Ref nodes); empty if unknown.
+using ObjectLookup = std::function<NodePtr(const std::string&)>;
+
 struct EvalSettings {
-    double chord_mm = 0.005;  // see tol::kDefaultChordMm
+    double chord_mm = 0.01;  // see tol::kDefaultChordMm
+    ObjectLookup lookup;     // resolves Ref nodes
 };
+
+/// B-Rep backend (the anvil-geom worker): JSON description -> mesh. Throws
+/// GeometryError with the kernel's message. Installed by the session.
+using BrepBackend = std::function<std::shared_ptr<const Mesh>(const std::string& json, double chord_mm)>;
+void set_brep_backend(BrepBackend b);
+bool has_brep_backend();
+
+/// JSON description of a node tree for the B-Rep kernel: parameters resolved
+/// to mm/rad, references inlined, sketches converted to world-space profiles.
+std::string brep_json(const NodePtr& n, const VariableResolver& vars, const EvalSettings& s);
 
 /// Content-addressed evaluation cache (thread-safe). Key = SHA-256 of the
 /// resolved canonical description + chord, so equal parameters give the

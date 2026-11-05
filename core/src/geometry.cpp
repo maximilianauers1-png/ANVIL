@@ -8,7 +8,9 @@
 #include <sstream>
 
 #include <manifold/manifold.h>
+#include <nlohmann/json.hpp>
 
+#include "anvil/sketch.hpp"
 #include "anvil/stl.hpp"
 #include "anvil/tolerance.hpp"
 
@@ -23,6 +25,18 @@ const char* node_kind_name(NodeKind k) {
         case NodeKind::Boolean: return "Boolean";
         case NodeKind::Transform: return "Transform";
         case NodeKind::ImportedMesh: return "Mesh";
+        case NodeKind::Sketch: return "Sketch";
+        case NodeKind::Extrude: return "Extrude";
+        case NodeKind::Revolve: return "Revolve";
+        case NodeKind::Fillet: return "Fillet";
+        case NodeKind::EdgeChamfer: return "Chamfer";
+        case NodeKind::Shell: return "Shell";
+        case NodeKind::LinearPattern: return "LinearPattern";
+        case NodeKind::CircularPattern: return "CircularPattern";
+        case NodeKind::Loft: return "Loft";
+        case NodeKind::Sweep: return "Sweep";
+        case NodeKind::StepImport: return "Step";
+        case NodeKind::Ref: return "Ref";
     }
     return "?";
 }
@@ -51,8 +65,35 @@ const std::vector<ParamSpec>& param_specs(NodeKind k) {
         {"rx", kAngle, 0, false, false, "rotation about X (applied first)"},
         {"ry", kAngle, 0, false, false, "rotation about Y"},
         {"rz", kAngle, 0, false, false, "rotation about Z (applied last)"}};
+    using dims::kNone;
+    static const std::vector<ParamSpec> extrude{
+        {"distance", kLength, 10, true, false, "extrusion length along the sketch normal"},
+        {"symmetric", kNone, 0, false, true, "1 = extrude half the distance to each side"}};
+    static const std::vector<ParamSpec> revolve{
+        {"angle", kAngle, 2 * 3.14159265358979323846, true, false, "revolution angle"},
+        {"axis", kNone, 1, false, true, "0 = sketch horizontal axis, 1 = sketch vertical axis"}};
+    static const std::vector<ParamSpec> fillet{{"r", kLength, 1, true, false, "fillet radius"}};
+    static const std::vector<ParamSpec> chamfer{{"d", kLength, 0.5, true, false, "chamfer distance"}};
+    static const std::vector<ParamSpec> shell{{"t", kLength, 1, true, false, "wall thickness (inwards)"}};
+    static const std::vector<ParamSpec> linpat{
+        {"n", kNone, 3, true, false, "number of copies (including the original)"},
+        {"dx", kLength, 10, false, false, "spacing X"},
+        {"dy", kLength, 0, false, false, "spacing Y"},
+        {"dz", kLength, 0, false, false, "spacing Z"}};
+    static const std::vector<ParamSpec> circpat{
+        {"n", kNone, 6, true, false, "number of copies (including the original)"},
+        {"angle", kAngle, 2 * 3.14159265358979323846, true, false, "total angle about Z"}};
+    static const std::vector<ParamSpec> loft{{"ruled", kNone, 0, false, true, "1 = straight (ruled) faces"}};
     static const std::vector<ParamSpec> none;
     switch (k) {
+        case NodeKind::Extrude: return extrude;
+        case NodeKind::Revolve: return revolve;
+        case NodeKind::Fillet: return fillet;
+        case NodeKind::EdgeChamfer: return chamfer;
+        case NodeKind::Shell: return shell;
+        case NodeKind::LinearPattern: return linpat;
+        case NodeKind::CircularPattern: return circpat;
+        case NodeKind::Loft: return loft;
         case NodeKind::Box: return box;
         case NodeKind::Cylinder: return cyl;
         case NodeKind::Sphere: return sph;
@@ -84,14 +125,41 @@ std::map<std::string, Param> with_defaults(NodeKind k, std::map<std::string, Par
 }
 }  // namespace
 
+bool is_brep_kind(NodeKind k) {
+    switch (k) {
+        case NodeKind::Extrude: case NodeKind::Revolve: case NodeKind::Fillet: case NodeKind::EdgeChamfer:
+        case NodeKind::Shell: case NodeKind::Loft: case NodeKind::Sweep: case NodeKind::StepImport:
+            return true;
+        default:
+            return false;
+    }
+}
+
+const std::vector<std::string>& attr_names(NodeKind k) {
+    static const std::vector<std::string> edges{"edges"}, faces{"faces"}, step{"path", "sha256"}, ref{"name"}, none;
+    switch (k) {
+        case NodeKind::Fillet: case NodeKind::EdgeChamfer: return edges;
+        case NodeKind::Shell: return faces;
+        case NodeKind::StepImport: return step;
+        case NodeKind::Ref: return ref;
+        default: return none;
+    }
+}
+
 NodePtr Node::child(const std::string& e) const {
-    if (kind == NodeKind::Boolean && (e == "a" || e == "b")) return inputs[e == "a" ? 0 : 1];
-    if (kind == NodeKind::Transform && e == "src") return inputs[0];
+    auto names = child_names();
+    for (std::size_t i = 0; i < names.size(); ++i)
+        if (names[i] == e) return inputs[i];
     return nullptr;
 }
 std::vector<std::string> Node::child_names() const {
     if (kind == NodeKind::Boolean) return {"a", "b"};
-    if (kind == NodeKind::Transform) return {"src"};
+    if (kind == NodeKind::Loft || kind == NodeKind::Sweep) {
+        std::vector<std::string> v;
+        for (std::size_t i = 0; i < inputs.size(); ++i) v.push_back(std::to_string(i));
+        return v;
+    }
+    if (inputs.size() == 1) return {"src"};
     return {};
 }
 
@@ -131,6 +199,37 @@ NodePtr make_imported(std::shared_ptr<const Mesh> mesh, std::string path, std::s
     return n;
 }
 
+NodePtr make_sketch(std::shared_ptr<const Sketch> sk) {
+    if (!sk) throw GeometryError("empty sketch");
+    auto n = std::make_shared<Node>();
+    n->kind = NodeKind::Sketch;
+    n->sketch = std::move(sk);
+    return n;
+}
+
+NodePtr make_feature(NodeKind k, std::vector<NodePtr> inputs, std::map<std::string, Param> params,
+                     std::map<std::string, std::string> attrs) {
+    check_names(k, params);
+    for (const auto& [name, v] : attrs)
+        if (std::find(attr_names(k).begin(), attr_names(k).end(), name) == attr_names(k).end())
+            throw GeometryError(std::string(node_kind_name(k)) + " has no attribute '" + name + "'");
+    std::size_t need_min = k == NodeKind::Loft || k == NodeKind::Sweep ? 2 : (k == NodeKind::StepImport || k == NodeKind::Ref) ? 0 : 1;
+    std::size_t need_max = k == NodeKind::Loft ? 64 : need_min;
+    if (inputs.size() < need_min || inputs.size() > need_max)
+        throw GeometryError(std::string(node_kind_name(k)) + " needs " + std::to_string(need_min) +
+                            (need_max > need_min ? "+" : "") + " input(s), got " + std::to_string(inputs.size()));
+    for (const auto& i : inputs)
+        if (!i) throw GeometryError(std::string(node_kind_name(k)) + ": missing input");
+    auto n = std::make_shared<Node>();
+    n->kind = k;
+    n->inputs = std::move(inputs);
+    n->params = with_defaults(k, std::move(params));
+    n->attrs = std::move(attrs);
+    return n;
+}
+
+NodePtr make_ref(const std::string& name) { return make_feature(NodeKind::Ref, {}, {}, {{"name", name}}); }
+
 NodePtr node_at(const NodePtr& root, const std::string& path) {
     NodePtr cur = root;
     std::size_t i = 0;
@@ -148,7 +247,7 @@ NodePtr node_at(const NodePtr& root, const std::string& path) {
 
 NodePtr with_params(const NodePtr& root, const std::string& path, const std::map<std::string, Param>& params) {
     if (path.empty()) {
-        if (root->kind == NodeKind::Boolean || root->kind == NodeKind::ImportedMesh)
+        if (param_specs(root->kind).empty())
             throw GeometryError(std::string(node_kind_name(root->kind)) + " has no editable parameters");
         check_names(root->kind, params);
         auto n = std::make_shared<Node>(*root);
@@ -250,6 +349,33 @@ std::string to_python(const NodePtr& n) {
             o << "import_mesh(" << py_str(n->source_path) << ", unit=" << unit_info(n->source_unit).symbol
               << ", sha256=" << py_str(n->source_sha256) << ")";
             break;
+        case NodeKind::Sketch:
+            o << sketch_to_python(*n->sketch);
+            break;
+        case NodeKind::Ref:
+            o << "ref(" << py_str(n->attrs.at("name")) << ")";
+            break;
+        case NodeKind::StepImport:
+            o << "import_step_solid(" << py_str(n->attrs.at("path")) << ", sha256=" << py_str(n->attrs.at("sha256")) << ")";
+            break;
+        default: {  // features: fn(inputs..., params..., attrs...)
+            static const std::map<NodeKind, const char*> fn{
+                {NodeKind::Extrude, "extrude"}, {NodeKind::Revolve, "revolve"}, {NodeKind::Fillet, "fillet"},
+                {NodeKind::EdgeChamfer, "chamfer_edges"}, {NodeKind::Shell, "shell"},
+                {NodeKind::LinearPattern, "pattern_linear"}, {NodeKind::CircularPattern, "pattern_circular"},
+                {NodeKind::Loft, "loft"}, {NodeKind::Sweep, "sweep"}};
+            o << fn.at(n->kind) << "(";
+            bool first = true;
+            for (const auto& in : n->inputs) o << (first ? "" : ", ") << to_python(in), first = false;
+            for (const auto& sp : param_specs(n->kind)) {
+                auto it = n->params.find(sp.name);
+                if (it == n->params.end()) continue;
+                o << (first ? "" : ", ") << sp.name << "=" << param_to_python(it->second, sp.dim);
+                first = false;
+            }
+            for (const auto& [k, v] : n->attrs) o << (first ? "" : ", ") << k << "=" << py_str(v), first = false;
+            o << ")";
+        }
     }
     return o.str();
 }
@@ -316,6 +442,8 @@ std::shared_ptr<const Shape> from_manifold(manifold::Manifold m) {
 
 const char* kind_word(NodeKind k) { return node_kind_name(k); }
 
+BrepBackend g_backend;
+
 struct Evaluator {
     const VariableResolver& vars;
     const EvalSettings& set;
@@ -336,10 +464,42 @@ struct Evaluator {
         return v;
     }
 
+    int ref_depth = 0;
+    NodePtr deref(const NodePtr& n) {
+        const std::string& name = n->attrs.at("name");
+        NodePtr t = set.lookup ? set.lookup(name) : nullptr;
+        if (!t) throw GeometryError("reference to unknown object '" + name + "'");
+        return t;
+    }
+    struct RefGuard {
+        int& d;
+        explicit RefGuard(int& x) : d(x) {
+            if (++d > 32) throw GeometryError("references form a cycle (an object refers to itself)");
+        }
+        ~RefGuard() { --d; }
+    };
+
+    bool needs_brep(const NodePtr& n) {
+        if (is_brep_kind(n->kind)) return true;
+        if (n->kind == NodeKind::Ref) {
+            RefGuard g(ref_depth);
+            return needs_brep(deref(n));
+        }
+        for (const auto& c : n->inputs)
+            if (needs_brep(c)) return true;
+        return false;
+    }
+
     // Canonical key: resolved values, so "2*r" and 25 mm give the same mesh.
     std::string key(const NodePtr& n) {
+        if (n->kind == NodeKind::Ref) {
+            RefGuard g(ref_depth);
+            return key(deref(n));
+        }
         std::ostringstream o;
         o << node_kind_name(n->kind) << "|chord=" << repr_double(set.chord_mm);
+        for (const auto& [k, v] : n->attrs) o << "|" << k << "=" << v;
+        if (n->kind == NodeKind::Sketch) o << "|" << sketch_to_python(solve_sketch(*n->sketch, vars).first);
         if (n->kind == NodeKind::Boolean) o << "|op=" << int(n->op);
         if (n->kind == NodeKind::ImportedMesh) o << "|mesh=" << n->source_sha256 << "|" << n->mesh.get();
         for (const auto& s : param_specs(n->kind))
@@ -352,9 +512,25 @@ struct Evaluator {
         std::string k = key(n);
         if (cache)
             if (auto hit = cache->get(k)) return hit;
-        auto s = compute(n);
+        auto s = n->kind != NodeKind::Sketch && n->kind != NodeKind::Ref && needs_brep(n) ? compute_brep(n) : compute(n);
         if (cache) cache->put(k, s);
         return s;
+    }
+
+    std::shared_ptr<const Shape> compute_brep(const NodePtr& n) {
+        if (!g_backend) throw GeometryError("the B-Rep kernel (anvil-geom) is not available in this process");
+        auto mesh = g_backend(brep_json(n, vars, set), set.chord_mm);
+        auto sh = std::make_shared<Shape>();
+        sh->brep = true;
+        sh->mesh = mesh;
+        manifold::MeshGL64 g;
+        g.numProp = 3;
+        for (const auto& p : mesh->V) g.vertProperties.insert(g.vertProperties.end(), {p.x, p.y, p.z});
+        for (const auto& t : mesh->F) g.triVerts.insert(g.triVerts.end(), {t[0], t[1], t[2]});
+        manifold::Manifold m(g);
+        if (m.Status() == manifold::Manifold::Error::NoError) sh->solid = std::make_shared<manifold::Manifold>(std::move(m));
+        else sh->error = "B-Rep tessellation is not a closed manifold (Manifold status " + std::to_string(int(m.Status())) + ")";
+        return sh;
     }
 
     std::shared_ptr<const Shape> compute(const NodePtr& n) {
@@ -439,6 +615,36 @@ struct Evaluator {
                 out->mesh = mesh;
                 return out;
             }
+            case NodeKind::Sketch: {
+                auto sh = std::make_shared<Shape>();
+                auto solved = solve_sketch(*n->sketch, vars);
+                sh->mesh = std::make_shared<Mesh>();
+                sh->lines = std::make_shared<Mesh>(sketch_lines(solved.first, set.chord_mm, true));
+                sh->error = "a sketch is not a solid (extrude or revolve it)";
+                return sh;
+            }
+            case NodeKind::Ref: {
+                RefGuard g(ref_depth);
+                return eval(deref(n));
+            }
+            case NodeKind::LinearPattern: case NodeKind::CircularPattern: {
+                auto src = eval(n->inputs[0]);
+                if (!src->solid) throw GeometryError("pattern source is not a closed manifold: " + src->error);
+                int count = int(std::lround(get(n, "n")));
+                if (count < 1 || count > 10000) throw GeometryError("pattern count must be 1..10000");
+                std::vector<Manifold> parts;
+                for (int i = 0; i < count; ++i) {
+                    if (n->kind == NodeKind::LinearPattern)
+                        parts.push_back(src->solid->Translate({get(n, "dx") * i, get(n, "dy") * i, get(n, "dz") * i}));
+                    else {
+                        double total = get(n, "angle");
+                        bool full = std::abs(total - 2 * std::numbers::pi) < 1e-12;
+                        double step = total / (full ? count : std::max(count - 1, 1));
+                        parts.push_back(src->solid->Rotate(0, 0, step * i * 180.0 / std::numbers::pi));
+                    }
+                }
+                return from_manifold(Manifold::BatchBoolean(parts, manifold::OpType::Add));
+            }
             case NodeKind::ImportedMesh: {
                 manifold::MeshGL64 g;
                 g.numProp = 3;
@@ -468,6 +674,78 @@ struct Affine {  // p' = R p + t
 };
 
 }  // namespace
+
+void set_brep_backend(BrepBackend b) { g_backend = std::move(b); }
+bool has_brep_backend() { return bool(g_backend); }
+
+namespace {
+nlohmann::json seg_json(const ProfileSegment& g) {
+    return {{"arc", g.arc}, {"a", {g.ax, g.ay}}, {"b", {g.bx, g.by}}, {"c", {g.cx, g.cy}}, {"r", g.r},
+            {"ccw", g.ccw}, {"full", g.full_circle}};
+}
+}  // namespace
+
+std::string brep_json(const NodePtr& root, const VariableResolver& vars, const EvalSettings& set) {
+    Evaluator ev{vars, set, nullptr};
+    std::function<nlohmann::json(const NodePtr&)> js = [&](const NodePtr& n) -> nlohmann::json {
+        nlohmann::json j;
+        if (n->kind == NodeKind::Ref) {
+            Evaluator::RefGuard g(ev.ref_depth);
+            return js(ev.deref(n));
+        }
+        if (n->kind == NodeKind::ImportedMesh)
+            throw GeometryError("an imported mesh cannot be combined with B-Rep features (fillet, extrude, ...); "
+                                "mesh-to-solid conversion arrives with the repair tools (M5)");
+        std::string kind = node_kind_name(n->kind);
+        std::transform(kind.begin(), kind.end(), kind.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        j["k"] = kind;
+        nlohmann::json p = nlohmann::json::object();
+        for (const auto& s : param_specs(n->kind))
+            if (n->params.count(s.name)) p[s.name] = ev.get(n, s.name);
+        if (n->kind == NodeKind::Cylinder && !n->params.count("d2")) p["d2"] = ev.get(n, "d");
+        j["p"] = p;
+        if (n->kind == NodeKind::Boolean) j["op"] = n->op == BoolOp::Union ? "union" : n->op == BoolOp::Difference ? "difference" : "intersection";
+        if (!n->attrs.empty()) j["a"] = n->attrs;
+        if (n->kind == NodeKind::Sketch) {
+            auto solved = solve_sketch(*n->sketch, vars).first;
+            Vec3 o, u, v, nn;
+            solved.frame(o, u, v, nn);
+            j["origin"] = {o.x, o.y, o.z}, j["u"] = {u.x, u.y, u.z}, j["v"] = {v.x, v.y, v.z}, j["n"] = {nn.x, nn.y, nn.z};
+            std::string profile_error, path_error;
+            try {
+                nlohmann::json faces = nlohmann::json::array();
+                for (const auto& f : sketch_profiles(solved)) {
+                    nlohmann::json fj;
+                    for (const auto& g : f.outer.segs) fj["outer"].push_back(seg_json(g));
+                    fj["holes"] = nlohmann::json::array();
+                    for (const auto& h : f.holes) {
+                        nlohmann::json hj = nlohmann::json::array();
+                        for (const auto& g : h.segs) hj.push_back(seg_json(g));
+                        fj["holes"].push_back(hj);
+                    }
+                    faces.push_back(fj);
+                }
+                j["faces"] = faces;
+            } catch (const GeometryError& e) {
+                profile_error = e.what();
+            }
+            try {
+                nlohmann::json path = nlohmann::json::array();
+                for (const auto& g : sketch_path(solved)) path.push_back(seg_json(g));
+                j["path"] = path;
+            } catch (const GeometryError& e) {
+                path_error = e.what();
+            }
+            j["profile_error"] = profile_error;
+            j["path_error"] = path_error;
+        }
+        nlohmann::json in = nlohmann::json::array();
+        for (const auto& c : n->inputs) in.push_back(js(c));
+        j["in"] = in;
+        return j;
+    };
+    return js(root).dump();
+}
 
 std::shared_ptr<const Shape> evaluate(const NodePtr& n, const VariableResolver& vars, const EvalSettings& s,
                                       ShapeCache* cache) {

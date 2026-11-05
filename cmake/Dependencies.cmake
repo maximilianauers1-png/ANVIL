@@ -44,6 +44,18 @@ if(NOT TARGET Eigen3::Eigen)
   target_include_directories(Eigen3::Eigen SYSTEM INTERFACE ${eigen3_SOURCE_DIR})
 endif()
 
+# --- nlohmann/json (worker protocol) ----------------------------------------------
+find_package(nlohmann_json 3.11 CONFIG QUIET)
+if(NOT nlohmann_json_FOUND)
+  FetchContent_Declare(nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG ${ANVIL_JSON_TAG}
+    GIT_SHALLOW TRUE
+    SYSTEM)
+  set(JSON_BuildTests OFF CACHE INTERNAL "")
+  FetchContent_MakeAvailable(nlohmann_json)
+endif()
+
 # --- Python (embedded) + pybind11 --------------------------------------------
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter Development.Embed)
 find_package(pybind11 3.0 CONFIG QUIET)

@@ -629,6 +629,58 @@ std::vector<ProfileFace> sketch_profiles(const Sketch& s) {
     return faces;
 }
 
+std::vector<ProfileSegment> sketch_path(const Sketch& s) {
+    struct Seg { ProfileSegment g; std::string a, b; };
+    std::vector<Seg> segs;
+    for (const auto& [id, c] : s.curves) {
+        if (c.construction) continue;
+        if (c.kind == CurveKind::Circle) throw GeometryError("a sweep path cannot contain full circles");
+        ProfileSegment g;
+        std::string pa = c.kind == CurveKind::Line ? c.pts[0] : c.pts[1], pb = c.kind == CurveKind::Line ? c.pts[1] : c.pts[2];
+        g.ax = s.points.at(pa).x, g.ay = s.points.at(pa).y, g.bx = s.points.at(pb).x, g.by = s.points.at(pb).y;
+        if (c.kind == CurveKind::Arc) {
+            g.arc = true, g.cx = s.points.at(c.pts[0]).x, g.cy = s.points.at(c.pts[0]).y;
+            g.r = std::hypot(g.ax - g.cx, g.ay - g.cy);
+        }
+        segs.push_back({g, pa, pb});
+    }
+    if (segs.empty()) throw GeometryError("sweep path sketch is empty");
+    auto same = [&](double x0, double y0, double x1, double y1) { return std::hypot(x0 - x1, y0 - y1) < kLoopJoinMm; };
+    // find an end that touches no other segment
+    auto degree = [&](double x, double y) {
+        int d = 0;
+        for (const auto& t : segs) d += same(t.g.ax, t.g.ay, x, y) + same(t.g.bx, t.g.by, x, y);
+        return d;
+    };
+    std::size_t start = segs.size();
+    bool flip = false;
+    for (std::size_t i = 0; i < segs.size() && start == segs.size(); ++i) {
+        if (degree(segs[i].g.ax, segs[i].g.ay) == 1) start = i, flip = false;
+        else if (degree(segs[i].g.bx, segs[i].g.by) == 1) start = i, flip = true;
+    }
+    if (start == segs.size()) throw GeometryError("sweep path must be an open chain (it is closed)");
+    std::vector<ProfileSegment> out;
+    std::vector<char> used(segs.size(), 0);
+    std::size_t cur = start;
+    for (;;) {
+        ProfileSegment g = segs[cur].g;
+        if (flip) std::swap(g.ax, g.bx), std::swap(g.ay, g.by), g.ccw = !g.ccw;
+        out.push_back(g);
+        used[cur] = 1;
+        std::size_t next = segs.size();
+        for (std::size_t j = 0; j < segs.size(); ++j) {
+            if (used[j]) continue;
+            if (same(segs[j].g.ax, segs[j].g.ay, g.bx, g.by)) next = j, flip = false;
+            else if (same(segs[j].g.bx, segs[j].g.by, g.bx, g.by)) next = j, flip = true;
+            if (next != segs.size()) break;
+        }
+        if (next == segs.size()) break;
+        cur = next;
+    }
+    if (out.size() != segs.size()) throw GeometryError("sweep path must be one connected chain");
+    return out;
+}
+
 Mesh sketch_lines(const Sketch& s, double chord, bool construction) {
     Mesh m;
     auto add = [&](double x0, double y0, double x1, double y1) {
