@@ -8,6 +8,7 @@ namespace anvil {
 struct Settings {
     int version = 1;
     QString theme = "studio";     // dark controls, light scene (user preference, M1 feedback)
+    QString scenery = "sunset";   // Studio background: none | sunset | fjord | night
     QString display = "shaded";   // or "mesh" (triangle edges overlaid)
     QString unit = "mm";
     QString radial_key = "Space";

@@ -98,6 +98,26 @@ void ViewportItem::sync() {
     in.edge[3] = float(edge_.alphaF());
     in.show_grid = show_grid_;
     in.mesh_view = mesh_view_;
+    // Scenery: light direction per scene (sun / moon), elevation e and azimuth a
+    // (from +X towards +Y); exposure compensates the different illuminances.
+    {
+        // exposure and haze tuned against the scattering model (bench/scenery_tune.py)
+        struct Scene { const char* name; int id; double el_deg, az_deg; float exposure, haze; };
+        static const Scene scenes[] = {{"sunset", 1, 2.0, 200, 12.0f, 2.0f},
+                                       {"fjord", 2, 24, 20, 8.0f, 1.5f},
+                                       {"night", 3, 32, 150, 0.9f, 1.0f}};
+        in.scenery = 0;
+        for (const auto& sc : scenes)
+            if (scenery_ == sc.name) {
+                const double e = sc.el_deg * std::numbers::pi / 180, a = sc.az_deg * std::numbers::pi / 180;
+                in.scenery = sc.id;
+                in.sun[0] = float(std::cos(e) * std::cos(a)), in.sun[1] = float(std::cos(e) * std::sin(a));
+                in.sun[2] = float(std::sin(e));
+                in.exposure = sc.exposure;
+                in.haze = sc.haze;
+                in.grid_opacity *= 0.55f;  // the grid stays readable without dominating the scenery
+            }
+    }
     in.wire[0] = float(wire_.redF()), in.wire[1] = float(wire_.greenF()), in.wire[2] = float(wire_.blueF());
     in.wire[3] = float(wire_.alphaF());
     // adaptive grid: minor lines at least ~10 px apart, steps of 10

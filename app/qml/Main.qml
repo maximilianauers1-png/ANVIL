@@ -52,6 +52,7 @@ ApplicationWindow {
                     edgeColor: Theme.edge
                     wireColor: Theme.wire
                     meshView: App.display === "mesh"
+                    scenery: Theme.name === "studio" ? App.scenery : "none"
                     objectColors: Theme.objectColors
 
                     // Radial menu key (default Space): hold, flick, release.

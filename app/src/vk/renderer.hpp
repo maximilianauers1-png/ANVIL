@@ -60,6 +60,10 @@ struct FrameInput {
     float grid_opacity = 0.6f;
     double grid_step = 1.0;
     bool show_grid = true;
+    int scenery = 0;            // 0 none (flat bg), 1 sunset, 2 fjord, 3 night
+    float sun[3] = {0.f, 0.f, 1.f};
+    float exposure = 1.f;
+    float haze = 1.f;           // aerosol density relative to a clear day
 };
 
 struct RendererStats {
@@ -141,7 +145,7 @@ class ViewportRenderer {
 
     VkPipelineLayout mesh_layout_ = VK_NULL_HANDLE, grid_layout_ = VK_NULL_HANDLE;
     VkPipeline mesh_pipe_ = VK_NULL_HANDLE, ghost_pipe_ = VK_NULL_HANDLE, edge_pipe_ = VK_NULL_HANDLE,
-               grid_pipe_ = VK_NULL_HANDLE;
+               grid_pipe_ = VK_NULL_HANDLE, sky_pipe_ = VK_NULL_HANDLE;
     VkQueryPool queries_ = VK_NULL_HANDLE;
     bool have_ts_ = false;
     bool drew_offscreen_ = false;

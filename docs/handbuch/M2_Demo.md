@@ -97,3 +97,22 @@ sketch_polyline([(-15, -10), (-5, -10), (-5, 5), (10, 5)], offset=1*mm, name="Tr
 cut_sketch("Trace", "Mask", depth=0.2*mm, mode="solidify", width=0.5*mm)
 export_stl("Mask", "mask.stl")
 ```
+
+## 7. Studio-Hintergrund: Landschaft statt weißer Leere
+
+Im Theme **Studio** zeigt der Viewport eine prozedurale Landschaft; Auswahl
+oben rechts (**Sunset ▾**) oder `scenery("sunset" | "fjord" | "night" | "none")`.
+Die Einstellung bleibt gespeichert. Die Landschaft liegt „im Unendlichen“
+(wie eine HDRI in Blender): sie dreht sich mit der Kamera, Teile, Raster und
+Kanten liegen immer davor.
+
+| Sonnenuntergang über dem Meer | Norwegischer Fjord | Fjord bei Nacht |
+|---|---|---|
+| ![](img/studio_sunset.jpg) | ![](img/studio_fjord.jpg) | ![](img/studio_night.jpg) |
+
+Alles wird pro Bild berechnet, ohne Texturen oder Downloads: Himmel als
+numerisch integrierte Einfachstreuung (Rayleigh, Mie, Ozon; Kasten-Young-
+Luftmasse), Fjordwände aus der Talgeometrie el(θ) = atan((H/w)|sin θ|) mit
+Wald-, Fels- und Schneegrenze in Kilometern, Dunst nach Beer-Lambert, Wasser
+mit Fresnel-Spiegelung (n = 1,33) und Wellen. Ein japanisches Dorf lässt sich
+prozedural nicht überzeugend erzeugen und wurde deshalb nicht umgesetzt.

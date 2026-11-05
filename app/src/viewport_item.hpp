@@ -28,6 +28,7 @@ class ViewportItem : public QQuickItem {
     Q_PROPERTY(bool showGrid MEMBER show_grid_ NOTIFY styleChanged)
     Q_PROPERTY(QColor wireColor MEMBER wire_ NOTIFY styleChanged)
     Q_PROPERTY(bool meshView MEMBER mesh_view_ NOTIFY styleChanged)
+    Q_PROPERTY(QString scenery MEMBER scenery_ NOTIFY styleChanged)
     Q_PROPERTY(QStringList selection READ selection WRITE setSelection NOTIFY selectionChanged)
     // snapping (read by the QML overlay)
     Q_PROPERTY(bool snapVisible READ snapVisible NOTIFY snapChanged)
@@ -220,6 +221,7 @@ class ViewportItem : public QQuickItem {
     bool show_grid_ = true;
     QColor wire_{0, 0, 0, 90};
     bool mesh_view_ = false;
+    QString scenery_ = "none";
 
     // interaction
     QPointF press_pos_, last_pos_, hover_pos_;

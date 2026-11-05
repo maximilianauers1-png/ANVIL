@@ -14,7 +14,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "app", "render", "shaders")
 OUT = os.path.join(SRC, "generated", "shaders_spv.hpp")
-STAGES = ["mesh.vert", "mesh.frag", "edge.vert", "edge.frag", "fullscreen.vert", "grid.frag", "composite.frag"]
+STAGES = ["mesh.vert", "mesh.frag", "edge.vert", "edge.frag", "fullscreen.vert", "grid.frag", "composite.frag", "sky.frag"]
 
 
 def build() -> str:

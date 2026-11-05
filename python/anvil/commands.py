@@ -208,6 +208,12 @@ for _mode, _label in (("shaded", "Shaded view"), ("mesh", "Mesh view")):
                          help=f"Viewport: {_label.lower()}", keywords="wireframe triangles display",
                          build=(lambda m: (lambda ctx: f"display({m!r})"))(_mode)))
 
+for _sc, _label in (("sunset", "Scenery: sunset"), ("fjord", "Scenery: fjord"), ("night", "Scenery: night"),
+                   ("none", "Scenery: plain")):
+    registry.add(Command(id=f"display.scenery_{_sc}", label=_label, category="View",
+                         help="Studio theme background", keywords="background environment sky landscape",
+                         build=(lambda n: (lambda ctx: f"scenery({n!r})"))(_sc)))
+
 # --- drawing (the viewport collects points, then generates sketch_* commands) ---
 for _id, _label, _help in (("draw.polyline", "Polyline", "Click points; click the first point to close, double-click or Enter to finish"),
                            ("draw.rect", "Rectangle", "Two corners"),

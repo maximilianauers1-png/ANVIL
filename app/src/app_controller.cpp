@@ -77,6 +77,7 @@ AppController::AppController(SessionOptions opt, std::filesystem::path session_d
     if (auto u = parse_length_unit(settings_.unit.toStdString())) unit_ = *u;
     theme_ = settings_.theme;
     display_ = settings_.display;
+    scenery_ = settings_.scenery;
     opt_.display_chord_mm = settings_.chord_mm;
     std::filesystem::create_directories(session_dir_);
     {
@@ -900,6 +901,7 @@ void AppController::clearPreview() {
 void AppController::requestUnit(const QString& s) { execute("set_unit(" + pyStr(s) + ")", "ui"); }
 void AppController::requestTheme(const QString& n) { execute("theme(" + pyStr(n) + ")", "ui"); }
 void AppController::requestDisplay(const QString& m) { execute("display(" + pyStr(m) + ")", "ui"); }
+void AppController::requestScenery(const QString& n) { execute("scenery(" + pyStr(n) + ")", "ui"); }
 void AppController::requestView(const QString& n) {
     if (n.startsWith("dir:")) {
         QStringList c = n.mid(4).split(',');
@@ -936,6 +938,11 @@ void AppController::handleUiRequest(const QString& json) {
         settings_.display = display_;
         settings_.save();
         emit displayChanged();
+    } else if (req == "scenery") {
+        scenery_ = o["name"].toString();
+        settings_.scenery = scenery_;
+        settings_.save();
+        emit sceneryChanged();
     } else if (req == "theme") {
         theme_ = o["name"].toString();
         settings_.theme = theme_;

@@ -104,7 +104,7 @@ ViewportRenderer::~ViewportRenderer() {
         if (d.mem) df_->vkFreeMemory(dev_, d.mem, nullptr);
     }
     destroy_targets();
-    for (VkPipeline p : {mesh_pipe_, ghost_pipe_, edge_pipe_, grid_pipe_})
+    for (VkPipeline p : {mesh_pipe_, ghost_pipe_, edge_pipe_, grid_pipe_, sky_pipe_})
         if (p) df_->vkDestroyPipeline(dev_, p, nullptr);
     for (VkPipelineLayout l : {mesh_layout_, grid_layout_})
         if (l) df_->vkDestroyPipelineLayout(dev_, l, nullptr);
@@ -305,6 +305,8 @@ void ViewportRenderer::create_pipelines() {
                                VK_PRIMITIVE_TOPOLOGY_LINE_LIST, true, true, false, GE, rp_, samples_, mesh_layout_);
     grid_pipe_ = make_pipeline(fullscreen_vert, sizeof fullscreen_vert, grid_frag, sizeof grid_frag,
                                VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false, true, false, GE, rp_, samples_, grid_layout_);
+    sky_pipe_ = make_pipeline(fullscreen_vert, sizeof fullscreen_vert, sky_frag, sizeof sky_frag,
+                              VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false, false, false, GE, rp_, samples_, grid_layout_);
 }
 
 void ViewportRenderer::destroy_targets() {
@@ -632,6 +634,19 @@ void ViewportRenderer::before_rendering() {
         df_->vkCmdDrawIndexed(cb, count, 1, 0, 0, 0);
         if (!lines) tris += g.tri_count / 3;
     };
+    if (in_.scenery > 0) {
+        // environment at infinity: always a perspective ray, also in orthographic views
+        Camera sc = cam;
+        sc.ortho = false;
+        GridPC g{};
+        to_float(inverse(mul(sc.projection(), V)), g.invViewProj);
+        g.eye[0] = in_.sun[0], g.eye[1] = in_.sun[1], g.eye[2] = in_.sun[2], g.eye[3] = float(in_.scenery);
+        g.color[0] = g.color[1] = g.color[2] = in_.exposure;
+        g.color[3] = in_.haze;
+        df_->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, sky_pipe_);
+        df_->vkCmdPushConstants(cb, grid_layout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof g, &g);
+        df_->vkCmdDraw(cb, 3, 1, 0, 0);
+    }
     for (const auto& it : in_.items)
         if (it.mesh && !it.ghost) draw(it, mesh_pipe_, Faces);
     if (in_.mesh_view)

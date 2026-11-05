@@ -96,6 +96,28 @@ Rectangle {
                 }
             }
         }
+        AButton {
+            id: sceneryBtn
+            objectName: "btnScenery"
+            visible: Theme.name === "studio"
+            text: ({none: "Plain", sunset: "Sunset", fjord: "Fjord", night: "Night"})[App.scenery] + " ▾"
+            tip: "Background scenery (Studio theme)"
+            onClicked: sceneryMenu.open()
+            Menu {
+                id: sceneryMenu
+                y: sceneryBtn.height
+                Repeater {
+                    model: [["sunset", "Sunset over the sea"], ["fjord", "Norwegian fjord"], ["night", "Fjord at night"], ["none", "Plain (no scenery)"]]
+                    delegate: MenuItem {
+                        objectName: "scenery_" + modelData[0]
+                        text: modelData[1]
+                        checkable: true
+                        checked: App.scenery === modelData[0]
+                        onTriggered: App.requestScenery(modelData[0])
+                    }
+                }
+            }
+        }
         AButton { text: "◎"; tip: "Customize the radial menu"; onClicked: bar.customizeRadial() }
     }
 }

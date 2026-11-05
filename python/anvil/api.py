@@ -29,7 +29,7 @@ __all__ = [
     "export_step", "solidify", "deform", "sketch_polyline", "sketch_rect", "sketch_circle", "extrude_sketch",
     "cut_sketch", "solidify_sketch", "revolve_sketch", "sketch_move", "sketch_dim", "sketch_constrain",
     "sketch_set", "sketch_delete", "deform_object", "cut_with", "fillet_object", "chamfer_object",
-    "shell_object", "edit_preview", "view", "theme", "display", "select", "set_unit", "GeometryError",
+    "shell_object", "edit_preview", "view", "theme", "display", "scenery", "select", "set_unit", "GeometryError",
 ]
 
 GeometryError = _a.GeometryError
@@ -594,6 +594,13 @@ def display(mode: str = "shaded"):
     if mode not in ("shaded", "mesh"):
         raise ValueError("display(): 'shaded' or 'mesh'")
     _a.ui_request(_json.dumps({"request": "display", "mode": mode}))
+
+
+def scenery(name: str = "sunset"):
+    """Background scenery of the Studio theme: 'sunset', 'fjord', 'night' or 'none'."""
+    if name not in ("none", "sunset", "fjord", "night"):
+        raise ValueError("scenery(): 'none', 'sunset', 'fjord' or 'night'")
+    _a.ui_request(_json.dumps({"request": "scenery", "name": name}))
 
 
 def select(*names):

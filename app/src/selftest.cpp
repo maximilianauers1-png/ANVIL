@@ -219,6 +219,17 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     });
     add("screenshot deform", [this] { screenshot("10_deform"); });
 
+    // 14) Studio scenery: sunset, fjord, night (procedural environment pass)
+    for (const char* sc : {"sunset", "fjord", "night"}) {
+        const QString name = sc;
+        add("scenery " + name, [this, name] {
+            app_->setSelection({});
+            app_->requestScenery(name);
+            app_->requestViewDirection(QVector3D(0.94f, 0.34f, 0.10f));  // low, towards the sun/moon
+        }, [this, name] { return idle() && app_->scenery() == name && std::abs(view_->camForward().z() + 0.1f) < 0.02f; });
+        add("screenshot scenery " + name, [this, name] { screenshot("11_scenery_" + name); });
+    }
+
     connect(&timer_, &QTimer::timeout, this, &SelfTest::tick);
     timer_.start(50);
     step_clock_.start();
