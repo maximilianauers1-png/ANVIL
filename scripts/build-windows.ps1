@@ -38,7 +38,10 @@ $env:Path = (Join-Path $env:QT_ROOT_DIR "bin") + ";" + $env:Path
 
 Push-Location $root
 try {
-  cmake --preset windows-release "-DPython3_EXECUTABLE=$pyExe"
+  # OpenCASCADE for anvil-geom: built once as its own project (scripts\build-occt.ps1)
+  & (Join-Path $PSScriptRoot "build-occt.ps1")
+  $occt = Join-Path $root ".deps\occt"
+  cmake --preset windows-release "-DPython3_EXECUTABLE=$pyExe" "-DOpenCASCADE_DIR=$occt\cmake"
   if ($LASTEXITCODE) { throw "configure failed" }
   cmake --build --preset windows-release
   if ($LASTEXITCODE) { throw "build failed" }
@@ -56,7 +59,7 @@ try {
   # OCCT license texts (LGPL-2.1 + exception) travel with the DLLs
   $lic = Join-Path $dist "licenses\OCCT"
   New-Item -ItemType Directory -Force -Path $lic | Out-Null
-  Get-ChildItem (Join-Path $root "build-win\_deps") -Recurse -Include "LICENSE_LGPL_21.txt", "OCCT_LGPL_EXCEPTION.txt" -ErrorAction SilentlyContinue |
+  Get-ChildItem $occt -Recurse -Include "LICENSE_LGPL_21.txt", "OCCT_LGPL_EXCEPTION.txt" -ErrorAction SilentlyContinue |
     Select-Object -First 2 | ForEach-Object { Copy-Item $_.FullName $lic }
 
   # Qt runtime (dynamically linked, LGPL: DLLs stay replaceable)

@@ -26,13 +26,16 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
       - uses: ilammy/msvc-dev-cmd@v1
-      - name: Cache OpenCASCADE build
+      - name: Cache OpenCASCADE
         uses: actions/cache@v4
         with:
-          path: build-win/_deps
-          key: occt-${{ hashFiles('cmake/Versions.cmake', 'workers/geom/CMakeLists.txt') }}-msvc2022
+          path: .deps/occt
+          key: occt-${{ hashFiles('cmake/Versions.cmake', 'scripts/build-occt.ps1') }}-msvc2022
+      - name: Build OpenCASCADE (once, then cached)
+        shell: pwsh
+        run: ./scripts/build-occt.ps1
       - name: Configure
-        run: cmake --preset windows-release -DPython3_EXECUTABLE="$env:pythonLocation\python.exe"
+        run: cmake --preset windows-release -DPython3_EXECUTABLE="$env:pythonLocation\python.exe" -DOpenCASCADE_DIR="${{ github.workspace }}/.deps/occt/cmake"
       - name: Build
         run: cmake --build --preset windows-release
       - name: Test (without GUI)

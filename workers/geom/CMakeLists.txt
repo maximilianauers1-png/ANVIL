@@ -2,33 +2,10 @@
 # dynamically here and nowhere else.
 find_package(OpenCASCADE CONFIG QUIET)
 if(NOT OpenCASCADE_FOUND)
-  message(STATUS "OpenCASCADE not found: building ${ANVIL_OCCT_TAG} from source (first build takes a while)")
-  set(BUILD_MODULE_ApplicationFramework OFF CACHE BOOL "" FORCE)
-  set(BUILD_MODULE_Draw OFF CACHE BOOL "" FORCE)
-  set(BUILD_MODULE_Visualization OFF CACHE BOOL "" FORCE)
-  set(BUILD_MODULE_DETools OFF CACHE BOOL "" FORCE)
-  set(BUILD_MODULE_DataExchange ON CACHE BOOL "" FORCE)
-  set(BUILD_MODULE_ModelingAlgorithms ON CACHE BOOL "" FORCE)
-  set(BUILD_MODULE_ModelingData ON CACHE BOOL "" FORCE)
-  set(BUILD_MODULE_FoundationClasses ON CACHE BOOL "" FORCE)
-  set(BUILD_DOC_Overview OFF CACHE BOOL "" FORCE)
-  set(USE_FREETYPE OFF CACHE BOOL "" FORCE)
-  set(USE_TK OFF CACHE BOOL "" FORCE)
-  set(USE_TCL OFF CACHE BOOL "" FORCE)
-  set(USE_OPENGL OFF CACHE BOOL "" FORCE)
-  set(USE_GLES2 OFF CACHE BOOL "" FORCE)
-  set(USE_D3D OFF CACHE BOOL "" FORCE)
-  set(USE_XLIB OFF CACHE BOOL "" FORCE)
-  set(USE_RAPIDJSON OFF CACHE BOOL "" FORCE)
-  set(USE_DRACO OFF CACHE BOOL "" FORCE)
-  set(USE_TBB OFF CACHE BOOL "" FORCE)
-  set(USE_VTK OFF CACHE BOOL "" FORCE)
-  set(BUILD_LIBRARY_TYPE "Shared" CACHE STRING "" FORCE)
-  FetchContent_Declare(occt
-    GIT_REPOSITORY https://github.com/Open-Cascade-SAS/OCCT.git
-    GIT_TAG ${ANVIL_OCCT_TAG}
-    GIT_SHALLOW TRUE)
-  FetchContent_MakeAvailable(occt)
+  message(FATAL_ERROR
+    "OpenCASCADE ${ANVIL_OCCT_TAG} not found. Windows: run scripts\\build-occt.ps1 (builds it once into "
+    ".deps\\occt) and configure with -DOpenCASCADE_DIR=<repo>/.deps/occt/cmake (build-windows.ps1 does both). "
+    "Linux: install the distribution package (libocct-*-dev). Or configure with -DANVIL_BUILD_GEOM=OFF.")
 endif()
 
 set(_occt_toolkits TKernel TKMath TKG2d TKG3d TKGeomBase TKBRep TKGeomAlgo TKTopAlgo TKPrim TKBO TKBool
