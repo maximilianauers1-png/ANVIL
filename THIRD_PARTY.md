@@ -45,9 +45,18 @@ festgeschrieben. Nutzung: privat, Einzelnutzer, Schweden.
 | Mesa Lavapipe | 25.2 | MIT | nur Linux-Tests (Software-Vulkan), nicht ausgeliefert |
 | GitHub Actions (nur CI-Kompilierprüfung) | actions/checkout@v4, setup-python@v5, upload-artifact@v4, jurplel/install-qt-action@v4, ilammy/msvc-dev-cmd@v1 | MIT | manuell ausgelöst; sieht nur Quellcode |
 
-Embree, OpenCASCADE, OpenVDB, oneTBB, Eigen, AMGCL, lib3mf, VMA sind in M1
-**nicht** eingebunden (siehe ADR 0015); ihre Zeilen oben gelten ab dem
-jeweiligen Meilenstein.
+Ab M2 zusätzlich eingebunden:
+
+| Komponente | Version | Lizenz | Bezug |
+|---|---|---|---|
+| OpenCASCADE (OCCT) | V8_0_1 (Windows, Quellbau per FetchContent); Linux-Entwicklung 7.6.3 (Distribution) | LGPL-2.1 + OCCT-exception-1.0, **dynamisch, nur in `anvil-geom`** | github.com/Open-Cascade-SAS/OCCT; Lizenztexte im Paket unter `licenses\OCCT` |
+| Eigen | 3.4.0 | MPL-2.0 (header-only, unverändert) | gitlab.com/libeigen/eigen; Skizzen-Solver (LDLT, SVD) |
+| nlohmann/json | v3.11.3 | MIT (header-only) | github.com/nlohmann/json; Worker-Protokoll |
+| Clipper2 | Commit `46f63917` (über Manifold) | BSL-1.0 | jetzt auch direkt genutzt (Solidify: `InflatePaths`) |
+
+Embree, OpenVDB, oneTBB, AMGCL, lib3mf, VMA sind bis M2 **nicht**
+eingebunden (siehe ADR 0015); ihre Zeilen oben gelten ab dem jeweiligen
+Meilenstein.
 
 ## KI-Worker (Python)
 

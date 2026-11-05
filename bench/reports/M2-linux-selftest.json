@@ -1,0 +1,380 @@
+{
+    "history": [
+        {
+            "label": "show(cylinder(d=20*mm, h=10*mm))",
+            "origin": "ui",
+            "source": "show(cylinder(d=20*mm, h=10*mm))"
+        },
+        {
+            "label": "edit(\"Cylinder1\", d=25*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder1\", d=25*mm)"
+        },
+        {
+            "label": "edit(\"Cylinder1\", h=3*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder1\", h=3*mm)"
+        },
+        {
+            "label": "edit(\"Cylinder1\", chamfer_top=0.6*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder1\", chamfer_top=0.6*mm)"
+        },
+        {
+            "label": "show(cylinder(d=20*mm, h=10*mm))",
+            "origin": "ui",
+            "source": "show(cylinder(d=20*mm, h=10*mm))"
+        },
+        {
+            "label": "edit(\"Cylinder2\", d=5.1*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder2\", d=5.1*mm)"
+        },
+        {
+            "label": "edit(\"Cylinder2\", h=2.2*mm)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder2\", h=2.2*mm)"
+        },
+        {
+            "label": "cut_with(\"Cylinder1\", \"Cylinder2\")",
+            "origin": "ui",
+            "source": "cut_with(\"Cylinder1\", \"Cylinder2\")"
+        },
+        {
+            "label": "sketch_rect((-5, -1.7), (5, 1.7), plane=\"XY\", offset=3*mm, name=\"Sketch1\")",
+            "origin": "ui",
+            "source": "sketch_rect((-5, -1.7), (5, 1.7), plane=\"XY\", offset=3*mm, name=\"Sketch1\")"
+        },
+        {
+            "label": "sketch_dim(\"Sketch1\", \"length\", \"L1\", 12*mm)",
+            "origin": "ui",
+            "source": "sketch_dim(\"Sketch1\", \"length\", \"L1\", 12*mm)"
+        },
+        {
+            "label": "cut_sketch(\"Sketch1\", \"Cylinder1\")",
+            "origin": "ui",
+            "source": "cut_sketch(\"Sketch1\", \"Cylinder1\")"
+        },
+        {
+            "label": "sketch_polyline([(-14, -3), (0, -3), (0, 6)], plane=\"XY\", name=\"Sketch2\")",
+            "origin": "ui",
+            "source": "sketch_polyline([(-14, -3), (0, -3), (0, 6)], plane=\"XY\", name=\"Sketch2\")"
+        },
+        {
+            "label": "solidify_sketch('Sketch2', 1*mm, 1*mm)",
+            "origin": "ui",
+            "source": "solidify_sketch('Sketch2', 1*mm, 1*mm)"
+        },
+        {
+            "label": "cut_with(\"Cylinder1\", \"Solid1\")",
+            "origin": "ui",
+            "source": "cut_with(\"Cylinder1\", \"Solid1\")"
+        },
+        {
+            "label": "deform_object('Cylinder1')",
+            "origin": "ui",
+            "source": "deform_object('Cylinder1')"
+        },
+        {
+            "label": "edit(\"Cylinder1\", twist=30*deg)",
+            "origin": "ui",
+            "source": "edit(\"Cylinder1\", twist=30*deg)"
+        }
+    ],
+    "ok": true,
+    "radial_frames_to_visible": 1,
+    "steps": [
+        {
+            "ms": 104,
+            "ok": true,
+            "step": "wait for first frames"
+        },
+        {
+            "ms": 111,
+            "ok": true,
+            "step": "screenshot start"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "hover origin snaps"
+        },
+        {
+            "ms": 72,
+            "ok": true,
+            "step": "radial flick creates Cylinder1"
+        },
+        {
+            "ms": 44,
+            "ok": true,
+            "step": "radial menu was drawable in <= 1 frame"
+        },
+        {
+            "check": "radial menu visible after 1 frame(s)",
+            "ok": true
+        },
+        {
+            "ms": 49,
+            "ok": true,
+            "step": "cancel held radial"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "select Cylinder1 by click"
+        },
+        {
+            "ms": 54,
+            "ok": true,
+            "step": "type d = 25"
+        },
+        {
+            "ms": 55,
+            "ok": true,
+            "step": "type h = 3"
+        },
+        {
+            "ms": 49,
+            "ok": true,
+            "step": "type chamfer_top = 0.6"
+        },
+        {
+            "ms": 145,
+            "ok": true,
+            "step": "screenshot base"
+        },
+        {
+            "ms": 52,
+            "ok": true,
+            "step": "deselect"
+        },
+        {
+            "ms": 222,
+            "ok": true,
+            "step": "radial submenu View > Bottom"
+        },
+        {
+            "ms": 89,
+            "ok": true,
+            "step": "screenshot bottom"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "hover bottom center"
+        },
+        {
+            "ms": 59,
+            "ok": true,
+            "step": "radial flick creates Cylinder2"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "select Cylinder2 in list"
+        },
+        {
+            "ms": 64,
+            "ok": true,
+            "step": "type d = 5.1"
+        },
+        {
+            "ms": 53,
+            "ok": true,
+            "step": "type h = 2.2"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "select Cylinder1"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "ctrl-select Cylinder2"
+        },
+        {
+            "ms": 73,
+            "ok": true,
+            "step": "radial flick north subtracts"
+        },
+        {
+            "ms": 74,
+            "ok": true,
+            "step": "iso view"
+        },
+        {
+            "ms": 117,
+            "ok": true,
+            "step": "screenshot result"
+        },
+        {
+            "ms": 51,
+            "ok": true,
+            "step": "select result"
+        },
+        {
+            "ms": 52,
+            "ok": true,
+            "step": "radial flick south opens export"
+        },
+        {
+            "ms": 131,
+            "ok": true,
+            "step": "export dialog checks pass"
+        },
+        {
+            "ms": 52,
+            "ok": true,
+            "step": "click Export"
+        },
+        {
+            "ms": 54,
+            "ok": true,
+            "step": "undo via button"
+        },
+        {
+            "ms": 61,
+            "ok": true,
+            "step": "redo via button"
+        },
+        {
+            "ms": 51,
+            "ok": true,
+            "step": "light theme"
+        },
+        {
+            "ms": 51,
+            "ok": true,
+            "step": "unit inch"
+        },
+        {
+            "ms": 123,
+            "ok": true,
+            "step": "screenshot light"
+        },
+        {
+            "ms": 48,
+            "ok": true,
+            "step": "studio theme + mm + mesh view"
+        },
+        {
+            "ms": 118,
+            "ok": true,
+            "step": "screenshot studio mesh"
+        },
+        {
+            "ms": 215,
+            "ok": true,
+            "step": "shaded, top view, deselect"
+        },
+        {
+            "ms": 52,
+            "ok": true,
+            "step": "radial flick NW starts Rectangle"
+        },
+        {
+            "ms": 52,
+            "ok": true,
+            "step": "rectangle: two corners on the top face"
+        },
+        {
+            "check": "sketch plane XY at offset 3",
+            "ok": true
+        },
+        {
+            "check": "sketch remembers its part: Cylinder1",
+            "ok": true
+        },
+        {
+            "ms": 48,
+            "ok": true,
+            "step": "sketch lies on the top face (z = 3 mm)"
+        },
+        {
+            "ms": 51,
+            "ok": true,
+            "step": "zoom to the part"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "open sketch editor"
+        },
+        {
+            "ms": 50,
+            "ok": true,
+            "step": "click the measured length of L1"
+        },
+        {
+            "ms": 89,
+            "ok": true,
+            "step": "type 12 -> length dimension"
+        },
+        {
+            "ms": 114,
+            "ok": true,
+            "step": "screenshot sketch edit"
+        },
+        {
+            "ms": 47,
+            "ok": true,
+            "step": "close sketch editor"
+        },
+        {
+            "ms": 99,
+            "ok": true,
+            "step": "cut through the part (one click)"
+        },
+        {
+            "ms": 45,
+            "ok": true,
+            "step": "radial flick N starts Polyline"
+        },
+        {
+            "ms": 70,
+            "ok": true,
+            "step": "polyline: three points, Enter"
+        },
+        {
+            "ms": 69,
+            "ok": true,
+            "step": "solidify (quick bar)"
+        },
+        {
+            "ms": 53,
+            "ok": true,
+            "step": "select part, radial N = Cut with..."
+        },
+        {
+            "ms": 79,
+            "ok": true,
+            "step": "pick the trace, Enter cuts"
+        },
+        {
+            "ms": 57,
+            "ok": true,
+            "step": "iso view for the result"
+        },
+        {
+            "ms": 205,
+            "ok": true,
+            "step": "screenshot mask cut"
+        },
+        {
+            "ms": 49,
+            "ok": true,
+            "step": "radial NW = Deform"
+        },
+        {
+            "ms": 62,
+            "ok": true,
+            "step": "scrub twist +60 px = 30 deg"
+        },
+        {
+            "ms": 230,
+            "ok": true,
+            "step": "screenshot deform"
+        }
+    ]
+}
