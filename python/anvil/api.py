@@ -30,7 +30,7 @@ __all__ = [
     "export_step", "solidify", "deform", "sketch_polyline", "sketch_rect", "sketch_circle", "extrude_sketch",
     "cut_sketch", "solidify_sketch", "revolve_sketch", "sketch_move", "sketch_dim", "sketch_constrain",
     "sketch_set", "sketch_delete", "deform_object", "cut_with", "fillet_object", "chamfer_object",
-    "shell_object", "edit_preview", "view", "theme", "display", "scenery", "select", "sculpt", "sculptable", "sculpted", "set_unit", "GeometryError",
+    "shell_object", "edit_preview", "view", "theme", "display", "scenery", "select", "sculpt", "sculptable", "sculpted", "resculpt", "set_unit", "GeometryError",
 ]
 
 GeometryError = _a.GeometryError
@@ -599,20 +599,18 @@ def display(mode: str = "shaded"):
 
 # --------------------------------------------------------------------------- sculpting (M3)
 
-_BRUSHES = ("draw", "carve", "smooth", "grab", "flatten")
+_BRUSHES = ("draw", "carve", "inflate", "clay", "crease", "pinch", "smooth", "grab", "flatten")
 
 
 def _voxel_for(name: str, voxel) -> float:
     if voxel is not None:
         return _coord_mm(voxel, "voxel")
-    # default 50 um, coarser for big objects so the box stays below the voxel bound
+    # ~1/600 of the bounding-box diagonal, at least 50 um: a 30 mm mini gets
+    # 0.05 mm, a 100 mm part 0.17 mm (interactive at any size)
     bb = info(name)["bbox"]
     diag = math.dist(bb[0], bb[1])
-    h = _a.DEFAULT_VOXEL_MM
-    box_voxels = (diag / h) ** 3 / 5.196  # cube with this diagonal
-    if box_voxels > 1e9:
-        h *= (box_voxels / 1e9) ** (1 / 3)
-    return float(f"{h:.3g}")
+    h = max(_a.DEFAULT_VOXEL_MM, diag / 600)
+    return float(f"{h:.2g}")
 
 
 def _coord_mm(v, what: str) -> float:
@@ -623,19 +621,25 @@ def _coord_mm(v, what: str) -> float:
     raise TypeError(f"{what} needs a unit, e.g. 0.05*mm")
 
 
+def _stroke_tuple(s):
+    if len(s) == 4:
+        brush, radius, strength, path = s
+        opt = {}
+    else:
+        brush, radius, strength, path, opt = s
+    return (str(brush), _coord_mm(radius, "radius"), float(strength), [tuple(map(float, p)) for p in path], dict(opt or {}))
+
+
 def sculpted(src, voxel=0.05 * mm, strokes=()) -> Solid:
     """A solid as a sculptable distance field (sparse bricks) with strokes
-    applied in order. strokes: [(brush, radius, strength, [(x, y, z), ...])]."""
-    out = []
-    for s in strokes:
-        brush, radius, strength, path = s
-        out.append((str(brush), _coord_mm(radius, "radius"), float(strength), [tuple(map(float, p)) for p in path]))
-    return Solid(_a.make_sculpt(_node(src), _coord_mm(voxel, "voxel"), out))
+    applied in order. strokes: [(brush, radius, strength, [(x, y, z), ...][, options])],
+    options: {"invert": bool, "symmetry": "x"|"y"|"z", "sym_at": mm, "falloff": exponent}."""
+    return Solid(_a.make_sculpt(_node(src), _coord_mm(voxel, "voxel"), [_stroke_tuple(s) for s in strokes]))
 
 
 def sculptable(obj, voxel=None) -> Obj:
-    """Turns an object into a sculptable one (voxel default 0.05 mm, coarser
-    for large objects). The original stays as the parametric source."""
+    """Turns an object into sculptable clay (voxel default: 1/600 of its size,
+    at least 0.05 mm). The original stays as the parametric source."""
     name = _name(obj)
     node = _a.get(name)
     if node.kind == "Sculpt":
@@ -644,21 +648,49 @@ def sculptable(obj, voxel=None) -> Obj:
     return Obj(name)
 
 
-def sculpt(obj, brush: str = "draw", path=(), radius=2 * mm, strength: float = 0.5) -> Obj:
-    """One sculpt stroke (one undo step): brush draw | carve | smooth | grab |
-    flatten along `path` (points in mm on or near the surface)."""
+def resculpt(obj, voxel) -> Obj:
+    """Changes the detail of sculpted clay: resamples it at a new voxel size
+    (finer = more detail, slower). The strokes so far are kept as the source."""
+    name = _name(obj)
+    node = _a.get(name)
+    if node.kind != "Sculpt":
+        return sculptable(name, voxel)
+    _a.set_root(name, _a.make_sculpt(node, _coord_mm(voxel, "voxel"), []))
+    return Obj(name)
+
+
+def sculpt(obj, brush: str = "draw", path=(), radius=2 * mm, strength: float = 0.5, invert: bool = False,
+           symmetry: str = None, sym_at=None, falloff: float = 1.0) -> Obj:
+    """One sculpt stroke (one undo step) along `path` (points in mm on the surface).
+    brush: draw | carve | inflate | clay | crease | pinch | smooth | grab | flatten.
+    invert: opposite direction; symmetry: mirror across the plane x|y|z = sym_at
+    (default: the object's centre); falloff: kernel exponent (<1 soft, >1 sharp)."""
     if brush not in _BRUSHES:
         raise ValueError(f"sculpt(): brush must be one of {', '.join(_BRUSHES)}")
     if not path:
         raise ValueError("sculpt(): empty path")
     if not 0 <= strength <= 1:
         raise ValueError("sculpt(): strength must be within 0..1")
+    if symmetry not in (None, "x", "y", "z"):
+        raise ValueError("sculpt(): symmetry must be 'x', 'y', 'z' or None")
     name = _name(obj)
     sculptable(name)
     node = _a.get(name)
     voxel, strokes = node.sculpt_info()
+    opt = {}
+    if invert:
+        opt["invert"] = True
+    if symmetry:
+        if sym_at is None:
+            bb = info(name)["bbox"]
+            k = "xyz".index(symmetry)
+            sym_at = 0.5 * (bb[0][k] + bb[1][k])
+        opt["symmetry"] = symmetry
+        opt["sym_at"] = float(sym_at.value if isinstance(sym_at, Quantity) else sym_at)
+    if falloff != 1.0:
+        opt["falloff"] = float(falloff)
     strokes = list(strokes) + [(brush, _coord_mm(radius, "radius"), float(strength),
-                                [tuple(float(c) for c in p) for p in path])]
+                                [tuple(float(c) for c in p) for p in path], opt)]
     _a.set_root(name, _a.make_sculpt(node.child("src"), voxel, strokes))
     return Obj(name)
 

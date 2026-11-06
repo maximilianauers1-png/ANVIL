@@ -159,7 +159,9 @@ class AppController : public QObject {
     Q_INVOKABLE void sketchConstrain(const QString& sketch, const QString& kind, const QStringList& refs);
     Q_INVOKABLE void sketchDimension(const QString& sketch, const QString& kind, const QStringList& refs, const QString& text);
     Q_INVOKABLE void sketchDelete(const QString& sketch, const QStringList& ids);
-    Q_INVOKABLE QString sketchTarget(const QString& sketch) const;  // part the sketch was drawn on ("" = unknown)
+    Q_INVOKABLE QString sketchTarget(const QString& sketch) const;
+    /// Voxel size (mm) of a sculpt object, 0 if it is not one.
+    Q_INVOKABLE double sculptVoxel(const QString& name) const;  // part the sketch was drawn on ("" = unknown)
 
   signals:
     void documentChanged();

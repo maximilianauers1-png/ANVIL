@@ -37,6 +37,7 @@ struct MeshCpu {
     std::vector<std::uint32_t> tris;
     std::vector<std::uint32_t> edges;  // feature edges, line list
     std::vector<std::uint32_t> wire;   // every triangle edge once (mesh view), line list
+    std::vector<float> nrm;            // optional per-vertex unit normals (smooth shading of sculpted parts)
 };
 
 struct DrawItem {
@@ -99,7 +100,8 @@ class ViewportRenderer {
     struct GpuMesh {
         GpuBuf host, dev;           // dev is used if host is not device local
         bool copied = false;
-        VkDeviceSize pos_off = 0, tri_off = 0, edge_off = 0, wire_off = 0;
+        VkDeviceSize pos_off = 0, tri_off = 0, edge_off = 0, wire_off = 0, nrm_off = 0;
+        bool has_nrm = false;
         std::uint32_t tri_count = 0, edge_count = 0, wire_count = 0;
         std::uint64_t last_used = 0;
     };
@@ -145,7 +147,7 @@ class ViewportRenderer {
 
     VkPipelineLayout mesh_layout_ = VK_NULL_HANDLE, grid_layout_ = VK_NULL_HANDLE;
     VkPipeline mesh_pipe_ = VK_NULL_HANDLE, ghost_pipe_ = VK_NULL_HANDLE, edge_pipe_ = VK_NULL_HANDLE,
-               grid_pipe_ = VK_NULL_HANDLE, sky_pipe_ = VK_NULL_HANDLE;
+               grid_pipe_ = VK_NULL_HANDLE, sky_pipe_ = VK_NULL_HANDLE, smooth_pipe_ = VK_NULL_HANDLE;
     VkQueryPool queries_ = VK_NULL_HANDLE;
     bool have_ts_ = false;
     bool drew_offscreen_ = false;

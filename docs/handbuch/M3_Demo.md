@@ -10,16 +10,27 @@
    nach Größe einige Sekunden.
 3. **Auf dem Objekt ziehen = modellieren, daneben ziehen = Ansicht drehen.**
 
-| Pinsel | Wirkung | Kurzweg |
-|---|---|---|
-| Draw | Material aufbauen | Radial O |
-| Carve | Material abtragen | Radial NO · **Strg** kehrt Draw/Carve um |
-| Smooth | Oberfläche glätten (rundet Kanten, Flächen bleiben) | Radial N · **Umschalt** halten |
-| Grab | Oberfläche mit dem Zeiger mitziehen | Radial NW |
-| Flatten | auf die Ebene des ersten Berührpunkts abflachen | Radial W |
+| Pinsel | Wirkung |
+|---|---|
+| Draw | Material entlang der Oberflächennormale aufbauen |
+| Carve | eingraben |
+| Clay | flache Schichten aufbauen – das Arbeitspferd für Formen |
+| Inflate | entlang der lokalen Normale aufblähen/schrumpfen |
+| Crease | scharfe Rillen: Falten, Lider, Stoff |
+| Pinch | Grate und Kanten schärfen |
+| Smooth | glätten (auch: **Umschalt** halten) |
+| Grab | Oberfläche mit dem Zeiger mitziehen |
+| Flatten | auf die Ebene des ersten Berührpunkts abflachen |
 
-Radius (0,2–20 mm) und Stärke im Sculpt-Feld; der Kreis am Zeiger zeigt den
-Radius auf der Oberfläche.
+**Einstellungen:** Größe (0,2–20 mm), Intensität (bei 100 % hebt ein Strich
+die Fläche um etwa die halbe Pinselgröße), Falloff (weich ↔ scharf),
+**Spiegeln X/Y/Z** (um die Objektmitte – für Figuren meist X), **Invert**
+(oder **Strg** halten). **Detail:** „Finer“/„Coarser“ tastet den Ton neu ab
+(halbe/doppelte Voxelgröße).
+
+Ein normales Teil im Sculpt-Modus anklicken wandelt es in Ton um; während
+der Umwandlung zeigt das Feld „Preparing clay…“. Radial im Sculpt-Modus:
+Draw, Clay, Smooth, Grab, Carve, weitere Pinsel (▸), View.
 
 ![Sculpt-Modus](img/m3_sculpt.jpg)
 

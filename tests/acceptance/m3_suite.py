@@ -4,6 +4,8 @@ import os
 import tempfile
 import time
 
+import _anvil
+
 from anvil import *
 
 pi = math.pi
@@ -58,8 +60,20 @@ subtract("Head", "Bore")
 assert info("Head")["volume"] < v_before - 200   # bore: pi 2^2 * ~20 mm = 251 mm^3
 assert check("Head")["ok"]
 
+# --- options round-trip through the command and the document --------------------
+show(sphere(d=16 * mm), name="Bust")
+sculpt("Bust", "clay", [(2, -1, 7.5), (2, 1, 7.5)], radius=1.5 * mm, strength=1.0, symmetry="x", falloff=2.0)
+sculpt("Bust", "crease", [(0, -7.5, 1), (0, -7.5, -1)], radius=1 * mm, strength=0.8, invert=True)
+src = _anvil.get("Bust").to_python()
+assert '"symmetry": "x"' in src and '"falloff": 2' in src and '"invert": True' in src, src
+assert info(eval(src))["volume"] == info("Bust")["volume"]
+assert check("Bust")["ok"], check("Bust")["summary"]
+v = info("Bust")["volume"]
+resculpt("Bust", 0.2 * mm)
+assert abs(info("Bust")["volume"] - v) / v < 0.02
+
 # --- errors are precise -------------------------------------------------------------
-for bad, msg in ((lambda: sculpt("Head", "pinch", [(0, 0, 0)]), "brush"),
+for bad, msg in ((lambda: sculpt("Head", "twist", [(0, 0, 0)]), "brush"),
                  (lambda: sculpt("Head", "draw", []), "empty path"),
                  (lambda: sculpted(sphere(d=3000 * mm), voxel=0.01 * mm), "too fine")):
     try:

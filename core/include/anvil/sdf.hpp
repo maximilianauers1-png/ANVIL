@@ -119,6 +119,7 @@ struct ChunkMesh {
     IVec3 chunk;
     Mesh mesh;
     std::vector<std::uint64_t> cell;  // packed cell coordinate per vertex
+    std::vector<Vec3> normal;         // unit normal per vertex: trilinear SDF gradient (seamless across chunks)
 };
 /// Cached by chunk key (process-wide LRU): unchanged chunks are not re-meshed.
 std::shared_ptr<const ChunkMesh> chunk_mesh(const Grid& g, const IVec3& chunk);
@@ -145,20 +146,40 @@ inline IVec3 chunk_of_brick(const IVec3& b) {
 std::optional<double> raycast(const Grid& g, const Vec3& origin, const Vec3& dir, double t_max);
 
 // --- sculpting ------------------------------------------------------------
-enum class Brush { Draw, Carve, Smooth, Grab, Flatten };
+enum class Brush { Draw, Carve, Smooth, Grab, Flatten, Inflate, Clay, Crease, Pinch };
 const char* brush_name(Brush b);
 bool parse_brush(const std::string& s, Brush& out);
+const std::vector<Brush>& all_brushes();
+
+/// Per-stroke options (part of the sculpt command, so replay is identical).
+struct StrokeOptions {
+    bool invert = false;      // draw <-> carve, inflate <-> deflate, clay removes, pinch pushes apart
+    int symmetry = -1;        // mirror axis 0/1/2 (x/y/z), -1 = none
+    double sym_at = 0.0;      // mirror plane: coordinate on that axis (mm)
+    double falloff = 1.0;     // kernel exponent: w^falloff (< 1 soft and wide, > 1 sharp)
+    bool operator==(const StrokeOptions&) const = default;
+};
 
 /// One stroke: points along the path (mm), radius R (mm), strength s in
-/// [0, 1]. Draw/Carve move the surface by up to s * R / 4 per stroke-length R
-/// (Wendland C2 falloff w(q) = (1-q)^4 (1+4q), q = |x-c|/R); Smooth blends
-/// towards the 6-neighbour mean; Grab carries the surface along the path;
-/// Flatten pulls towards the plane through the first dab.
+/// [0, 1]. Kernel: Wendland C2 w(q) = (1-q)^4 (1+4q), q = |x-c|/R, raised to
+/// `falloff`. Dabs every R/4 along the path.
+///   draw/carve  semi-Lagrangian displacement along the dab normal n0,
+///               f(x) <- f(x - a w n0), a = 0.2 R s per dab (peak ~0.53 R s
+///               for a stroke: 2.67 overlapping dabs); a <= 0.2 R keeps the
+///               map injective (|a| max|w'| < 1 needs a < 0.47 R)
+///   inflate     the same along the local normal (offsets the surface)
+///   clay        fills up to the plane a above the dab point (flat build-up)
+///   crease      sharp groove: carve with w^3 and a tangential pinch
+///   pinch       pulls the surface towards the stroke (sharpens ridges)
+///   smooth      1 + 4 s MBO iterations per dab (indicator diffusion)
+///   grab        carries the surface along with the pointer
+///   flatten     blends towards the plane through the first point
 struct Stroke {
     Brush brush = Brush::Draw;
     std::vector<Vec3> path;
     double radius = 2.0;
     double strength = 0.5;
+    StrokeOptions opt;
 };
 
 /// Incremental stroke application: points arrive one by one (live sculpting)
@@ -166,7 +187,7 @@ struct Stroke {
 /// gives bit-identical grids to apply_stroke (replay of the Python command).
 class StrokeApplier {
   public:
-    StrokeApplier(Grid& g, Brush brush, double radius, double strength);
+    StrokeApplier(Grid& g, Brush brush, double radius, double strength, StrokeOptions opt = {});
     void add(const Vec3& p);
     void finish();
     /// Bricks changed since the last call.
@@ -175,14 +196,17 @@ class StrokeApplier {
 
   private:
     void dab(const Vec3& c, const Vec3& grab);
+    void dab_one(const Vec3& c, const Vec3& grab, const Vec3& plane_n, double plane_d);
+    Vec3 mirror(const Vec3& p) const;
     Grid& g_;
     Brush brush_;
     double R_, st_, spacing_;
+    StrokeOptions opt_;
     bool have_first_ = false, finished_ = false;
     Vec3 last_point_, last_dab_;
     double carry_ = 0;
-    Vec3 plane_n_;
-    double plane_d_ = 0;
+    Vec3 plane_n_, plane_n_m_;
+    double plane_d_ = 0, plane_d_m_ = 0;
     std::size_t dabs_ = 0;
     std::unordered_set<IVec3, IVec3Hash> touched_, all_touched_;
 };

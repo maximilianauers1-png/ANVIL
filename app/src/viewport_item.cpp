@@ -72,6 +72,12 @@ ViewportItem::ViewportItem(QQuickItem* parent) : QQuickItem(parent) {
             QMetaObject::invokeMethod(this, [this, object, grid, stroke] {
                 live_.done = true;
                 pending_grid_ = grid;
+                // the root the stroke's command will produce (chained strokes build on it)
+                if (stroke_root_ && stroke_root_->kind == NodeKind::Sculpt) {
+                    auto strokes = stroke_root_->sculpt->strokes;
+                    strokes.push_back(stroke);
+                    expected_root_ = make_sculpt(stroke_root_->inputs[0], stroke_root_->sculpt->voxel, strokes);
+                }
                 if (stroke_done_) stroke_done_(QString::fromStdString(object), stroke_root_, grid, stroke);
             }, Qt::QueuedConnection);
         });
@@ -248,6 +254,16 @@ void ViewportItem::geometryChange(const QRectF& n, const QRectF& o) {
 void ViewportItem::setScene(std::shared_ptr<const Scene> s) {
     bool first = !scene_ && s && !s->bounds.empty();
     scene_ = std::move(s);
+    {
+        QStringList so;
+        if (scene_)
+            for (const auto& o : scene_->objects)
+                if (o.grid) so << QString::fromStdString(o.name);
+        if (so != sculpt_objects_) {
+            sculpt_objects_ = so;
+            emit sculptObjectsChanged();
+        }
+    }
     // a finished stroke stays visible until its command's evaluation arrives
     if (live_.done && scene_) {
         bool committed = true;
@@ -256,6 +272,7 @@ void ViewportItem::setScene(std::shared_ptr<const Scene> s) {
         if (committed) {
             live_ = LiveParts{};
             pending_grid_.reset();
+            expected_root_.reset();
         }
     }
     if (first) frameAll();

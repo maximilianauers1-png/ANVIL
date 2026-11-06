@@ -75,22 +75,42 @@ bool ViewportItem::sculptPress(QMouseEvent* e) {
     double t = 0;
     Vec3 p;
     const SceneObject* o = sculpt_object_at(e->position(), &t, &p);
-    if (!o || !sculpt_engine_) return false;  // empty space: orbit as usual
+    if (!o || !sculpt_engine_) {
+        // a regular part under the pointer: turn it into clay (one command), then sculpt
+        updateSnap(e->position());
+        const QString hit = QString::fromStdString(snap_.object);
+        if (!hit.isEmpty() && !sculpt_objects_.contains(hit)) {
+            emit sculptConvertRequested(hit);
+            return true;
+        }
+        return false;  // empty space: orbit as usual
+    }
     sdf::Brush brush = sdf::Brush::Draw;
     sdf::parse_brush(sculpt_brush_.toStdString(), brush);
+    sdf::StrokeOptions opt;
     const auto mods = e->modifiers();
     if (mods & Qt::ShiftModifier) brush = sdf::Brush::Smooth;  // sculpting convention
-    else if ((mods & Qt::ControlModifier) && brush == sdf::Brush::Draw) brush = sdf::Brush::Carve;
-    else if ((mods & Qt::ControlModifier) && brush == sdf::Brush::Carve) brush = sdf::Brush::Draw;
+    opt.invert = sculpt_invert_ != bool(mods & Qt::ControlModifier);
+    opt.falloff = sculpt_falloff_;
+    if (sculpt_symmetry_ == "x" || sculpt_symmetry_ == "y" || sculpt_symmetry_ == "z") {
+        opt.symmetry = sculpt_symmetry_ == "x" ? 0 : sculpt_symmetry_ == "y" ? 1 : 2;
+        // mirror plane through the centre of the clay (fixed for the stroke, stored in the command)
+        const Box3 bb = sculpt_grid_of(*o)->bounds();
+        opt.sym_at = bb.center()[opt.symmetry];
+    }
+    // continuing right after a stroke whose command is not evaluated yet:
+    // build on its result (no flicker, no lost stroke)
+    const bool chained = live_.done && pending_grid_ && live_.object == o->name && expected_root_;
+    stroke_root_ = chained ? expected_root_ : o->root;
+    if (!chained) live_.chunks.clear();
     live_.object = o->name;
-    live_.chunks.clear();
     live_.done = false;
-    stroke_root_ = o->root;
+    stroke_brush_ = brush;
     sculpting_ = true;
     stroke_t_ = t;
     grab_plane_p_ = p;
     grab_plane_n_ = cam_.forward();
-    sculpt_engine_->begin(o->name, sculpt_grid_of(*o), brush, sculpt_radius_, sculpt_strength_);
+    sculpt_engine_->begin(o->name, sculpt_grid_of(*o), brush, sculpt_radius_, sculpt_strength_, opt);
     sculpt_engine_->add(p);
     return true;
 }
@@ -101,7 +121,7 @@ bool ViewportItem::sculptMove(QPointF pos) {
     const Ray r = c.ray(pos.x() * dpr(), pos.y() * dpr());
     const Vec3 d = normalized(r.dir);
     Vec3 p;
-    if (sculpt_brush_ == "grab") {  // the grabbed surface follows the pointer in the screen plane
+    if (stroke_brush_ == sdf::Brush::Grab) {  // the grabbed surface follows the pointer in the screen plane
         double den = dot(d, grab_plane_n_);
         if (std::abs(den) < 1e-9) return true;
         p = r.origin + d * (dot(grab_plane_p_ - r.origin, grab_plane_n_) / den);

@@ -28,10 +28,10 @@ SculptEngine::~SculptEngine() {
 }
 
 void SculptEngine::begin(const std::string& object, std::shared_ptr<const sdf::Grid> start, sdf::Brush brush,
-                         double radius, double strength) {
+                         double radius, double strength, sdf::StrokeOptions opt) {
     std::lock_guard lk(mu_);
     Job j{Job::Begin, object, std::move(start), {}, {}};
-    j.stroke.brush = brush, j.stroke.radius = radius, j.stroke.strength = strength;
+    j.stroke.brush = brush, j.stroke.radius = radius, j.stroke.strength = strength, j.stroke.opt = opt;
     q_.push_back(std::move(j));
     active_ = true;
     cv_.notify_one();
@@ -94,7 +94,7 @@ void SculptEngine::loop() {
                     grid = std::make_unique<sdf::Grid>(*j.start);  // copy: shares bricks with the document
                     stroke = j.stroke;
                     stroke.path.clear();
-                    applier = std::make_unique<sdf::StrokeApplier>(*grid, stroke.brush, stroke.radius, stroke.strength);
+                    applier = std::make_unique<sdf::StrokeApplier>(*grid, stroke.brush, stroke.radius, stroke.strength, stroke.opt);
                     break;
                 case Job::Point:
                     if (!applier) break;

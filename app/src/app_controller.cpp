@@ -185,9 +185,18 @@ void AppController::attachViewport(ViewportItem* v) {
         }
         QStringList pts;
         for (const auto& p : st.path) pts << "(" + reprDouble(p.x) + ", " + reprDouble(p.y) + ", " + reprDouble(p.z) + ")";
+        QString extra;
+        if (st.opt.invert) extra += ", invert=True";
+        if (st.opt.symmetry >= 0)
+            extra += QString(", symmetry=\"") + "xyz"[st.opt.symmetry] + "\", sym_at=" + reprDouble(st.opt.sym_at);
+        if (st.opt.falloff != 1.0) extra += ", falloff=" + reprDouble(st.opt.falloff);
         execute("sculpt(" + pyStr(object) + ", " + pyStr(sdf::brush_name(st.brush)) + ", [" + pts.join(", ") +
-                    "], radius=" + reprDouble(st.radius) + "*mm, strength=" + reprDouble(st.strength) + ")",
+                    "], radius=" + reprDouble(st.radius) + "*mm, strength=" + reprDouble(st.strength) + extra + ")",
                 "ui");
+    });
+    connect(v, &ViewportItem::sculptConvertRequested, this, [this](const QString& name) {
+        setSelection({name});
+        execute("sculptable(" + pyStr(name) + ")", "ui");
     });
     connect(v, &ViewportItem::toolsPicked, this, &AppController::onToolsPicked);
     connect(v, &ViewportItem::objectDoubleClicked, this, [this](const QString& name) {
@@ -224,6 +233,11 @@ QString AppController::uniqueName(const QString& base) const {
         QString n = base + QString::number(i);
         if (!st->find(n.toStdString())) return n;
     }
+}
+
+double AppController::sculptVoxel(const QString& name) const {
+    const Object* o = session_->document().state()->find(name.toStdString());
+    return o && o->root && o->root->kind == NodeKind::Sculpt ? o->root->sculpt->voxel : 0.0;
 }
 
 QString AppController::sketchTarget(const QString& sketch) const {

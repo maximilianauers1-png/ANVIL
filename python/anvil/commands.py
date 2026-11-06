@@ -301,8 +301,12 @@ def _(ctx):
 
 
 # --- sculpting (M3): brushes are UI state; strokes become sculpt(...) commands ---
-for _b, _label, _help in (("draw", "Draw", "Build up material (Ctrl: carve)"),
-                          ("carve", "Carve", "Remove material (Ctrl: draw)"),
+for _b, _label, _help in (("draw", "Draw", "Build up along the surface normal (Ctrl: carve)"),
+                          ("carve", "Carve", "Dig in (Ctrl: draw)"),
+                          ("clay", "Clay", "Build flat layers"),
+                          ("inflate", "Inflate", "Swell along the local normal"),
+                          ("crease", "Crease", "Sharp grooves"),
+                          ("pinch", "Pinch", "Sharpen ridges"),
                           ("smooth", "Smooth", "Relax the surface (also: hold Shift)"),
                           ("grab", "Grab", "Pull the surface along with the pointer"),
                           ("flatten", "Flatten", "Plane off towards the first touched point")):
@@ -325,6 +329,8 @@ _MORE = {"submenu": "More", "items": ["create.sphere", "create.torus", "create.c
                                       "file.import_step", "", "", ""]}
 _EDIT = {"submenu": "Edit", "items": ["edit.fillet", "edit.shell", "edit.chamfer", "edit.duplicate", "edit.hide",
                                       "boolean.union", "boolean.intersect", ""]}
+_BRUSHES_MORE = {"submenu": "Brushes", "items": ["sculpt.inflate", "sculpt.crease", "sculpt.pinch", "sculpt.flatten",
+                                                "", "", "", ""]}
 registry.radial = {
     "Design": {
         # most used first and stable: drawing tools sit on the top half
@@ -337,9 +343,9 @@ registry.radial = {
     },
     # Sculpt mode: brushes always in the same places, with or without selection
     "Sculpt": {
-        "empty": ["sculpt.draw", "sculpt.carve", "sculpt.smooth", "sculpt.grab", "sculpt.flatten", "",
+        "empty": ["sculpt.draw", "sculpt.clay", "sculpt.smooth", "sculpt.grab", "sculpt.carve", _BRUSHES_MORE,
                   "file.export_stl", _VIEW],
-        "selection": ["sculpt.draw", "sculpt.carve", "sculpt.smooth", "sculpt.grab", "sculpt.flatten",
-                      "sculpt.make", "file.export_stl", _VIEW],
+        "selection": ["sculpt.draw", "sculpt.clay", "sculpt.smooth", "sculpt.grab", "sculpt.carve", _BRUSHES_MORE,
+                      "sculpt.make", _VIEW],
     },
 }

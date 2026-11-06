@@ -54,6 +54,7 @@ class SelfTest : public QObject {
     bool hasObject(const QString& name) const;
     double objectValue(const QString& name, const QString& key) const;
     double vol_before_ = 0;
+    qsizetype hist_before_ = 0;
     void check(bool ok, const QString& what);
 
     QQuickWindow* win_;

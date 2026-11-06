@@ -512,11 +512,20 @@ const char* brush_name(Brush b) {
         case Brush::Smooth: return "smooth";
         case Brush::Grab: return "grab";
         case Brush::Flatten: return "flatten";
+        case Brush::Inflate: return "inflate";
+        case Brush::Clay: return "clay";
+        case Brush::Crease: return "crease";
+        case Brush::Pinch: return "pinch";
     }
     return "draw";
 }
+const std::vector<Brush>& all_brushes() {
+    static const std::vector<Brush> v{Brush::Draw,    Brush::Carve, Brush::Inflate, Brush::Clay, Brush::Crease,
+                                      Brush::Pinch,   Brush::Smooth, Brush::Grab,   Brush::Flatten};
+    return v;
+}
 bool parse_brush(const std::string& s, Brush& out) {
-    for (Brush b : {Brush::Draw, Brush::Carve, Brush::Smooth, Brush::Grab, Brush::Flatten})
+    for (Brush b : all_brushes())
         if (s == brush_name(b)) return out = b, true;
     return false;
 }
@@ -671,9 +680,19 @@ void reinit(Block& B, IVec3 lo, IVec3 hi) {
 }
 }  // namespace
 
-StrokeApplier::StrokeApplier(Grid& g, Brush brush, double radius, double strength)
-    : g_(g), brush_(brush), R_(radius), st_(std::clamp(strength, 0.0, 1.0)), spacing_(radius / 4) {
+StrokeApplier::StrokeApplier(Grid& g, Brush brush, double radius, double strength, StrokeOptions opt)
+    : g_(g), brush_(brush), R_(radius), st_(std::clamp(strength, 0.0, 1.0)), spacing_(radius / 4), opt_(opt) {
     if (!(radius > 0)) throw std::invalid_argument("sculpt radius must be > 0");
+    if (!(opt_.falloff > 0)) throw std::invalid_argument("sculpt falloff must be > 0");
+    if (opt_.symmetry < -1 || opt_.symmetry > 2) throw std::invalid_argument("sculpt symmetry axis must be x, y or z");
+}
+
+Vec3 StrokeApplier::mirror(const Vec3& p) const {
+    Vec3 q = p;
+    if (opt_.symmetry == 0) q.x = 2 * opt_.sym_at - p.x;
+    if (opt_.symmetry == 1) q.y = 2 * opt_.sym_at - p.y;
+    if (opt_.symmetry == 2) q.z = 2 * opt_.sym_at - p.z;
+    return q;
 }
 
 void StrokeApplier::add(const Vec3& p) {
@@ -684,6 +703,11 @@ void StrokeApplier::add(const Vec3& p) {
         // flatten: plane through the first point, normal = outward field gradient there
         plane_n_ = normalized(g_.gradient(p));
         plane_d_ = dot(plane_n_, p);
+        if (opt_.symmetry >= 0) {
+            const Vec3 pm = mirror(p);
+            plane_n_m_ = normalized(g_.gradient(pm));
+            plane_d_m_ = dot(plane_n_m_, pm);
+        }
         if (brush_ != Brush::Grab) dab(p, {});
         return;
     }
@@ -718,24 +742,35 @@ std::vector<IVec3> StrokeApplier::take_touched() {
 
 void StrokeApplier::dab(const Vec3& cc, const Vec3& grab) {
     ++dabs_;
+    dab_one(cc, grab, plane_n_, plane_d_);
+    if (opt_.symmetry >= 0) {
+        Vec3 gm = grab;
+        if (opt_.symmetry == 0) gm.x = -gm.x;
+        if (opt_.symmetry == 1) gm.y = -gm.y;
+        if (opt_.symmetry == 2) gm.z = -gm.z;
+        const Vec3 cm = mirror(cc);
+        // on the mirror plane both halves would hit the same spot twice
+        if (norm(cm - cc) > 1e-9 * std::max(1.0, R_)) dab_one(cm, gm, plane_n_m_, plane_d_m_);
+    }
+}
+
+void StrokeApplier::dab_one(const Vec3& cc, const Vec3& grab, const Vec3& pn, double pd) {
     const double h = g_.h(), R = R_, st = st_;
-    const double reach = R + (kBand + 1) * h + norm(grab);
+    const double sign = opt_.invert ? -1.0 : 1.0;
+    // displacement height per dab (see Stroke): a = 0.2 R s
+    const double a = 0.2 * R * st;
+    const double disp = (brush_ == Brush::Grab) ? norm(grab) : (brush_ == Brush::Smooth || brush_ == Brush::Flatten) ? 0.0 : a;
+    const double reach = R + (kBand + 1) * h + disp;
     Block B = load_block(g_, cc - Vec3{reach, reach, reach}, cc + Vec3{reach, reach, reach});
     const Block before = B;
-    // sub-steps keep every update below one voxel: the band (3 h) stays valid
-    // until the reinitialisation after the dab rebuilds it
-    double amount = 0;
-    if (brush_ == Brush::Draw || brush_ == Brush::Carve) amount = st * spacing_ / 4;  // mm per dab
-    if (brush_ == Brush::Grab) amount = norm(grab);
-    int sub = std::max(1, int(std::ceil(amount / h)));
-    // Grab advects semi-Lagrangian (unconditionally stable); the deformation
-    // x -> x + w(|x-c|/R) d stays injective while |d| max|w'| < 1; for the
-    // Wendland C2 kernel w'(q) = -20 q (1-q)^3, max |w'| = 2.11 / R at q = 1/4,
-    // so |d| < 0.47 R. Sub-steps of at most R/4 keep a 1.9x margin.
-    if (brush_ == Brush::Grab) sub = std::max(1, int(std::ceil(amount / (0.25 * R))));
+    // mean outward normal at the dab point (direction of draw/clay/crease/pinch)
+    Vec3 n0 = normalized(g_.gradient(cc));
+    if (norm(n0) == 0) n0 = {0, 0, 1};
+    // Grab: semi-Lagrangian sub-steps of at most R/4 (fold limit 0.47 R, see Stroke)
+    int sub = brush_ == Brush::Grab ? std::max(1, int(std::ceil(disp / (0.25 * R)))) : 1;
+    if (brush_ == Brush::Smooth) sub = 1 + int(std::lround(4 * st));  // MBO iterations
     const Vec3 origin = Vec3{double(B.b0.x), double(B.b0.y), double(B.b0.z)} * (kBrick * h);
-    const Vec3 pn = plane_n_;
-    const double pd = plane_d_;
+    const double fexp = brush_ == Brush::Crease ? 3.0 * opt_.falloff : opt_.falloff;
     for (int ss = 0; ss < sub; ++ss) {
         const Block src = B;
         // voxels inside the dab's sphere bounding box (block coordinates)
@@ -745,39 +780,81 @@ void StrokeApplier::dab(const Vec3& cc, const Vec3& grab) {
         const int y0 = std::max(1, int(cv.y) - rv), y1 = std::min(B.ny - 2, int(cv.y) + rv);
         const int z0 = std::max(1, int(cv.z) - rv), z1 = std::min(B.nz - 2, int(cv.z) + rv);
         parallel_for(std::size_t(std::max(0, z1 - z0 + 1)), [&](std::size_t iz) {
-          const int z = z0 + int(iz);
-          for (int y = y0; y <= y1; ++y)
+            const int z = z0 + int(iz);
+            for (int y = y0; y <= y1; ++y)
                 for (int x = x0; x <= x1; ++x) {
                     const Vec3 p = origin + Vec3{double(x), double(y), double(z)} * h;
                     const double q = norm(p - cc) / R;
                     if (q >= 1.0) continue;
-                    const double w = wendland(q);
+                    double w = wendland(q);
+                    if (fexp != 1.0) w = std::pow(w, fexp);
                     float& f = B.at(x, y, z);
+                    const float f0 = src.at(x, y, z);
+                    auto sample_shift = [&](const Vec3& d_mm) {  // f(x - d), semi-Lagrangian
+                        const Vec3 d = d_mm / h;
+                        return float(src.sample(x - d.x, y - d.y, z - d.z));
+                    };
                     switch (brush_) {
-                        case Brush::Draw: f -= float(w * amount / sub / h); break;
-                        case Brush::Carve: f += float(w * amount / sub / h); break;
+                        case Brush::Draw:
+                            f = sample_shift(n0 * (sign * a * w));
+                            break;
+                        case Brush::Carve:
+                            f = sample_shift(n0 * (-sign * a * w));
+                            break;
+                        case Brush::Inflate: {
+                            // along the local normal of the field (offsets the surface)
+                            const double gx = 0.5 * (src.at(x + 1, y, z) - src.at(x - 1, y, z));
+                            const double gy = 0.5 * (src.at(x, y + 1, z) - src.at(x, y - 1, z));
+                            const double gz = 0.5 * (src.at(x, y, z + 1) - src.at(x, y, z - 1));
+                            const double gn = std::sqrt(gx * gx + gy * gy + gz * gz);
+                            if (gn < 1e-6 || std::abs(f0) >= kBand) break;
+                            f = sample_shift(Vec3{gx, gy, gz} * (sign * a * w / gn));
+                            break;
+                        }
+                        case Brush::Clay: {
+                            // fill up to the plane a above the dab point: blend towards the
+                            // union min(f, f_plane) (inverted: cut, max(f, -f_plane')). A min/max
+                            // of distance fields stays 1-Lipschitz, so the band stays consistent
+                            // (no jumps the contouring would reject).
+                            const double fp = std::clamp((dot(n0, p - cc) - sign * a) / h, -double(kBand), double(kBand));
+                            const double target = opt_.invert ? std::max<double>(f0, fp) : std::min<double>(f0, fp);
+                            f = float(f0 + st * w * (target - f0));
+                            break;
+                        }
+                        case Brush::Crease: {
+                            // groove: carve along n0 plus a tangential pull towards the centre
+                            Vec3 t = p - cc;
+                            t = t - n0 * dot(t, n0);
+                            f = sample_shift(n0 * (-sign * 0.6 * a * w) - t * (0.35 * st * w));
+                            break;
+                        }
+                        case Brush::Pinch: {
+                            // material moves towards the stroke: sample further out
+                            Vec3 t = p - cc;
+                            t = t - n0 * dot(t, n0);
+                            f = sample_shift(t * (-sign * 0.4 * st * w));
+                            break;
+                        }
                         case Brush::Smooth: {
                             // MBO-style (Merriman, Bence & Osher 1992): diffuse the clamped
                             // indicator c = clamp(f/h, -1, 1), which moves the zero level by
                             // mean curvature. Averaging f itself would pull the interior
                             // medial axis (ridge of the SDF) into convex corners and sharpen them.
-                            const float f0 = src.at(x, y, z);
                             if (std::abs(f0) >= 1.5f) break;
                             auto c = [](float v) { return std::clamp(v, -1.0f, 1.0f); };
                             double avg = (c(src.at(x + 1, y, z)) + c(src.at(x - 1, y, z)) + c(src.at(x, y + 1, z)) +
                                           c(src.at(x, y - 1, z)) + c(src.at(x, y, z + 1)) + c(src.at(x, y, z - 1))) / 6.0;
-                            f = float(f0 + 0.5 * st * w * (avg - c(f0)));
+                            f = float(f0 + 0.5 * w * (avg - c(f0)));
                             break;
                         }
                         case Brush::Grab: {  // semi-Lagrangian: f(x) <- f(x - w delta)
-                            const Vec3 d = grab * (w / sub / h);
-                            f = float(src.sample(x - d.x, y - d.y, z - d.z));
+                            f = sample_shift(grab * (w / sub));
                             break;
                         }
                         case Brush::Flatten: {
-                            if (std::abs(src.at(x, y, z)) >= kBand) break;
-                            double fp = (dot(pn, p) - pd) / h;
-                            f = float(src.at(x, y, z) + 0.5 * st * w * (fp - src.at(x, y, z)));
+                            if (std::abs(f0) >= kBand) break;
+                            const double fp = (dot(pn, p) - pd) / h;
+                            f = float(f0 + st * w * (fp - f0));
                             break;
                         }
                     }
@@ -785,8 +862,8 @@ void StrokeApplier::dab(const Vec3& cc, const Vec3& grab) {
         });
     }
     {
-        // only where the brush changed values (sphere box + the 3-voxel stencil reach)
-        const int rr = int(std::ceil((R + norm(grab)) / h)) + 3;
+        // only where the brush changed values (sphere box + displacement + the 3-voxel stencil reach)
+        const int rr = int(std::ceil((R + disp) / h)) + 3;
         const Vec3 cb = (cc - origin) / h;
         reinit(B, {int(cb.x) - rr, int(cb.y) - rr, int(cb.z) - rr}, {int(cb.x) + rr, int(cb.y) + rr, int(cb.z) + rr});
     }
@@ -795,7 +872,7 @@ void StrokeApplier::dab(const Vec3& cc, const Vec3& grab) {
 
 std::vector<IVec3> apply_stroke(Grid& g, const Stroke& s) {
     if (s.path.empty()) return {};
-    StrokeApplier a(g, s.brush, s.radius, s.strength);
+    StrokeApplier a(g, s.brush, s.radius, s.strength, s.opt);
     for (const auto& p : s.path) a.add(p);
     a.finish();
     return a.take_touched();
@@ -890,6 +967,20 @@ std::shared_ptr<const ChunkMesh> build_chunk(const Grid& g, const IVec3& chunk, 
                     if (!n) return slot = -1;
                     out.V.push_back(Vec3{(i + mx / n) * h, (j + my / n) * h, (k + mz / n) * h});
                     cells.push_back(pack_cell({i, j, k}));
+                    // normal: central-difference gradients at the 8 corners, trilinear at the vertex
+                    {
+                        const double u = mx / n, vv = my / n, ww = mz / n;
+                        Vec3 gsum{};
+                        for (int c = 0; c < 8; ++c) {
+                            const int cx = c & 1, cy = (c >> 1) & 1, cz = c >> 2;
+                            const int X = i - o.x + cx, Y = j - o.y + cy, Z = k - o.z + cz;
+                            const Vec3 gc{nb.at(X + 1, Y, Z) - nb.at(X - 1, Y, Z), nb.at(X, Y + 1, Z) - nb.at(X, Y - 1, Z),
+                                          nb.at(X, Y, Z + 1) - nb.at(X, Y, Z - 1)};
+                            gsum += gc * ((cx ? u : 1 - u) * (cy ? vv : 1 - vv) * (cz ? ww : 1 - ww));
+                        }
+                        const double gl = norm(gsum);
+                        cm->normal.push_back(gl > 0 ? gsum / gl : Vec3{0, 0, 1});
+                    }
                     return slot = std::int32_t(out.V.size() - 1);
                 };
                 const auto& brick = bit->second;

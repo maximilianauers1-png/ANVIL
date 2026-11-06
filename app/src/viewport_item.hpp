@@ -35,6 +35,10 @@ class ViewportItem : public QQuickItem {
     Q_PROPERTY(QString sculptBrush MEMBER sculpt_brush_ NOTIFY sculptChanged)
     Q_PROPERTY(double sculptRadius MEMBER sculpt_radius_ NOTIFY sculptChanged)
     Q_PROPERTY(double sculptStrength MEMBER sculpt_strength_ NOTIFY sculptChanged)
+    Q_PROPERTY(bool sculptInvert MEMBER sculpt_invert_ NOTIFY sculptChanged)
+    Q_PROPERTY(QString sculptSymmetry MEMBER sculpt_symmetry_ NOTIFY sculptChanged)
+    Q_PROPERTY(double sculptFalloff MEMBER sculpt_falloff_ NOTIFY sculptChanged)
+    Q_PROPERTY(QStringList sculptObjects READ sculptObjects NOTIFY sculptObjectsChanged)
     Q_PROPERTY(QPointF brushPos READ brushPos NOTIFY brushChanged)
     Q_PROPERTY(double brushScreenRadius READ brushScreenRadius NOTIFY brushChanged)
     Q_PROPERTY(QString brushTarget READ brushTarget NOTIFY brushChanged)
@@ -160,6 +164,7 @@ class ViewportItem : public QQuickItem {
     QPointF brushPos() const { return brush_pos_; }
     double brushScreenRadius() const { return brush_px_; }
     QString brushTarget() const { return brush_target_; }
+    QStringList sculptObjects() const { return sculpt_objects_; }
     double sculptUpdateMs() const { return sculpt_ms_; }
     /// Called (GUI thread) when a live stroke is complete: object, its root at
     /// stroke start, the resulting grid and the stroke.
@@ -193,6 +198,9 @@ class ViewportItem : public QQuickItem {
     void cameraChanged();
     void radialChanged();
     void sculptChanged();
+    void sculptObjectsChanged();
+    /// Pressed on a regular part in sculpt mode: convert it to clay.
+    void sculptConvertRequested(const QString& name);
     void brushChanged();
     void statsChanged();
     /// The user picked something (empty name = clicked empty space).
@@ -279,7 +287,12 @@ class ViewportItem : public QQuickItem {
     std::function<QString(const QString&)> context_resolver_;
     // sculpting
     QString sculpt_brush_ = "draw";
-    double sculpt_radius_ = 2.0, sculpt_strength_ = 0.5;
+    double sculpt_radius_ = 2.0, sculpt_strength_ = 0.7, sculpt_falloff_ = 1.0;
+    bool sculpt_invert_ = false;
+    QString sculpt_symmetry_;
+    QStringList sculpt_objects_;          // objects whose clay is evaluated (strokes possible)
+    sdf::Brush stroke_brush_ = sdf::Brush::Draw;
+    NodePtr expected_root_;               // object root after the last finished stroke
     QPointF brush_pos_{-1e6, -1e6};
     double brush_px_ = 0, sculpt_ms_ = 0;
     QString brush_target_;

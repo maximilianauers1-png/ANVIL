@@ -216,7 +216,11 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
             for (const auto& s : n.node->sculpt->strokes) {
                 py::list path;
                 for (const auto& p : s.path) path.append(py::make_tuple(p.x, p.y, p.z));
-                strokes.append(py::make_tuple(std::string(sdf::brush_name(s.brush)), s.radius, s.strength, path));
+                py::dict opt;
+                if (s.opt.invert) opt["invert"] = true;
+                if (s.opt.symmetry >= 0) opt["symmetry"] = std::string(1, "xyz"[s.opt.symmetry]), opt["sym_at"] = s.opt.sym_at;
+                if (s.opt.falloff != 1.0) opt["falloff"] = s.opt.falloff;
+                strokes.append(py::make_tuple(std::string(sdf::brush_name(s.brush)), s.radius, s.strength, path, opt));
             }
             return py::make_tuple(n.node->sculpt->voxel, strokes);
         });
@@ -257,16 +261,32 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         std::vector<sdf::Stroke> out;
         for (const auto& it : strokes) {
             auto t = it.cast<py::tuple>();
-            if (t.size() != 4) throw std::invalid_argument("stroke: (brush, radius, strength, path)");
+            if (t.size() != 4 && t.size() != 5)
+                throw std::invalid_argument("stroke: (brush, radius, strength, path[, options])");
             sdf::Stroke s;
             if (!sdf::parse_brush(t[0].cast<std::string>(), s.brush))
                 throw std::invalid_argument("unknown brush '" + t[0].cast<std::string>() +
-                                            "' (draw, carve, smooth, grab, flatten)");
+                                            "' (draw, carve, inflate, clay, crease, pinch, smooth, grab, flatten)");
             s.radius = t[1].cast<double>();
             s.strength = t[2].cast<double>();
             for (const auto& p : t[3].cast<py::list>()) {
                 auto q = p.cast<py::tuple>();
                 s.path.push_back({q[0].cast<double>(), q[1].cast<double>(), q[2].cast<double>()});
+            }
+            if (t.size() == 5 && !t[4].is_none()) {
+                auto o = t[4].cast<py::dict>();
+                for (const auto& [k, v] : o) {
+                    const std::string key = k.cast<std::string>();
+                    if (key == "invert") s.opt.invert = v.cast<bool>();
+                    else if (key == "falloff") s.opt.falloff = v.cast<double>();
+                    else if (key == "sym_at") s.opt.sym_at = v.cast<double>();
+                    else if (key == "symmetry") {
+                        const std::string ax = v.is_none() ? "" : v.cast<std::string>();
+                        s.opt.symmetry = ax == "x" ? 0 : ax == "y" ? 1 : ax == "z" ? 2 : ax.empty() ? -1
+                                         : throw std::invalid_argument("symmetry must be 'x', 'y', 'z' or None");
+                    } else throw std::invalid_argument("unknown stroke option '" + key + "' (invert, symmetry, sym_at, falloff)");
+                }
+                if (!(s.opt.falloff > 0)) throw std::invalid_argument("falloff must be > 0");
             }
             out.push_back(std::move(s));
         }

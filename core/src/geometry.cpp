@@ -263,6 +263,31 @@ NodePtr make_sculpt(NodePtr src, double voxel, std::vector<sdf::Stroke> strokes)
     return n;
 }
 
+// options only when they differ from the defaults: {"invert": True, ...}
+std::string stroke_options_python(const sdf::StrokeOptions& o) {
+    const sdf::StrokeOptions d;
+    std::vector<std::string> kv;
+    if (o.invert != d.invert) kv.push_back("\"invert\": True");
+    if (o.symmetry >= 0) {
+        kv.push_back(std::string("\"symmetry\": \"") + "xyz"[o.symmetry] + "\"");
+        if (o.sym_at != 0) kv.push_back("\"sym_at\": " + repr_double(o.sym_at));
+    }
+    if (o.falloff != d.falloff) kv.push_back("\"falloff\": " + repr_double(o.falloff));
+    if (kv.empty()) return {};
+    std::string s = "{";
+    for (std::size_t i = 0; i < kv.size(); ++i) s += (i ? ", " : "") + kv[i];
+    return s + "}";
+}
+
+// canonical text of one stroke for the cache-key hash chain
+std::string stroke_key(const sdf::Stroke& s) {
+    std::ostringstream o;
+    o << sdf::brush_name(s.brush) << "|" << repr_double(s.radius) << "|" << repr_double(s.strength) << "|inv="
+      << s.opt.invert << "|sym=" << s.opt.symmetry << "@" << repr_double(s.opt.sym_at) << "|fo=" << repr_double(s.opt.falloff);
+    for (const auto& p : s.path) o << "|" << repr_double(p.x) << "," << repr_double(p.y) << "," << repr_double(p.z);
+    return o.str();
+}
+
 std::string strokes_to_python(const std::vector<sdf::Stroke>& strokes) {
     std::ostringstream o;
     o << "[";
@@ -273,7 +298,9 @@ std::string strokes_to_python(const std::vector<sdf::Stroke>& strokes) {
         for (std::size_t k = 0; k < s.path.size(); ++k)
             o << (k ? ", " : "") << "(" << repr_double(s.path[k].x) << ", " << repr_double(s.path[k].y) << ", "
               << repr_double(s.path[k].z) << ")";
-        o << "])";
+        o << "]";
+        if (auto opt = stroke_options_python(s.opt); !opt.empty()) o << ", " << opt;
+        o << ")";
     }
     o << "]";
     return o.str();
@@ -617,10 +644,7 @@ struct Evaluator {
         std::string hk = sha256_hex(key(n->inputs[0]) + "|voxel=" + repr_double(n->sculpt->voxel));
         for (std::size_t i = 0; i < k; ++i) {
             const auto& s = n->sculpt->strokes[i];
-            std::ostringstream o;
-            o << hk << "|" << sdf::brush_name(s.brush) << "|" << repr_double(s.radius) << "|" << repr_double(s.strength);
-            for (const auto& p : s.path) o << "|" << repr_double(p.x) << "," << repr_double(p.y) << "," << repr_double(p.z);
-            hk = sha256_hex(o.str());
+            hk = sha256_hex(hk + "|" + stroke_key(s));
         }
         return hk;
     }
@@ -632,10 +656,7 @@ struct Evaluator {
         std::vector<std::string> keys{sha256_hex(key(n->inputs[0]) + "|voxel=" + repr_double(sd.voxel))};
         for (std::size_t i = 0; i < sd.strokes.size(); ++i) {
             const auto& s = sd.strokes[i];
-            std::ostringstream o;
-            o << keys.back() << "|" << sdf::brush_name(s.brush) << "|" << repr_double(s.radius) << "|" << repr_double(s.strength);
-            for (const auto& p : s.path) o << "|" << repr_double(p.x) << "," << repr_double(p.y) << "," << repr_double(p.z);
-            keys.push_back(sha256_hex(o.str()));
+            keys.push_back(sha256_hex(keys.back() + "|" + stroke_key(s)));
         }
         std::size_t k = sd.strokes.size() + 1;
         std::shared_ptr<const sdf::Grid> start;

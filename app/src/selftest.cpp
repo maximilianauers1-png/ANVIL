@@ -240,6 +240,25 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
         return idle() && !h.isEmpty() && h.back().toMap()["source"].toString().startsWith("sculpt(\"Cylinder1\", \"draw\"") &&
                objectValue("Cylinder1", "volume") > vol_before_ + 0.1;
     }, 60000);
+    add("two strokes back to back (clay, mirrored)", [this] {
+        vol_before_ = objectValue("Cylinder1", "volume");
+        hist_before_ = app_->history().size();
+        view_->setProperty("sculptBrush", "clay");
+        view_->setProperty("sculptSymmetry", "x");
+        for (double y : {-6.0, -9.0}) {  // the second starts before the first is evaluated
+            QPointF a = project(3, y, 3), b = project(8, y, 3);
+            mouseMove(a);
+            mousePress(a, Qt::LeftButton);
+            for (int i = 1; i <= 8; ++i) mouseMove(a + (b - a) * (i / 8.0), Qt::LeftButton);
+            mouseRelease(b, Qt::LeftButton);
+        }
+    }, [this] {
+        auto h = app_->history();
+        if (!idle() || h.size() < hist_before_ + 2) return false;
+        const QString last = h.back().toMap()["source"].toString(), prev = h[h.size() - 2].toMap()["source"].toString();
+        return last.contains("\"clay\"") && prev.contains("\"clay\"") && last.contains("symmetry=\"x\"") &&
+               objectValue("Cylinder1", "volume") > vol_before_ + 0.1 && view_->sculptObjects().contains("Cylinder1");
+    }, 60000);
     add("iso view for sculpt", [this] { app_->requestView("iso"); }, [this] { return idle(); });
     add("screenshot sculpt", [this] { screenshot("12_sculpt"); });
     add("back to Design", [this] { app_->setMode("Design"); }, [this] { return !view_->sculptMode(); });

@@ -33,7 +33,7 @@ class SculptEngine {
     ~SculptEngine();
 
     void begin(const std::string& object, std::shared_ptr<const sdf::Grid> start, sdf::Brush brush, double radius_mm,
-               double strength);
+               double strength, sdf::StrokeOptions opt);
     void add(const Vec3& p);
     void end();
     bool active() const { return active_; }

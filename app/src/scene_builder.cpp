@@ -77,6 +77,11 @@ std::shared_ptr<const MeshCpu> SceneBuilder::chunk_to_gpu(const sdf::ChunkMesh& 
     for (std::size_t i = 0; i < m.F.size(); ++i)
         for (int k = 0; k < 3; ++k) g->tris[3 * i + k] = m.F[i][k];
     for (const auto& e : feature_edges(m, -1.0)) g->wire.push_back(e[0]), g->wire.push_back(e[1]);  // mesh view
+    if (c.normal.size() == m.V.size()) {
+        g->nrm.resize(m.V.size() * 3);
+        for (std::size_t i = 0; i < m.V.size(); ++i)
+            g->nrm[3 * i] = float(c.normal[i].x), g->nrm[3 * i + 1] = float(c.normal[i].y), g->nrm[3 * i + 2] = float(c.normal[i].z);
+    }
     return g;
 }
 

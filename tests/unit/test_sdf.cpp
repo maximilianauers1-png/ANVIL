@@ -174,3 +174,50 @@ TEST_CASE("welded chunk meshes are closed; live (incremental) strokes equal repl
     CHECK(validate(w2, {.self_intersections = false}).ok);
     CHECK(w2.signed_volume() > w.signed_volume());
 }
+
+TEST_CASE("rework: every brush keeps a closed surface; draw height ~0.53 R s; symmetry and invert", "[sdf]") {
+    const double h = 0.1, r = 6.0;
+    for (Brush b : all_brushes()) {
+        Grid g = sphere_grid(r, h);
+        Stroke s{b, {{-2, 0, r}, {0, 0.5, r}, {2, 0, r}}, 1.5, 0.8, {}};
+        if (b == Brush::Grab) s.path = {{0, 0, r}, {0, 0, r + 0.8}};
+        apply_stroke(g, s);
+        auto rep = validate(dual_contour(g), {.self_intersections = true});
+        INFO(brush_name(b) << ": " << rep.summary());
+        CHECK(rep.ok);
+    }
+    // draw: a straight stroke over a flat-ish top raises the surface by ~0.53 R s (derivation in sdf.hpp)
+    {
+        Grid g = sphere_grid(20.0, h);  // radius 20: nearly flat under a 2 mm brush
+        const double R = 2.0, s = 1.0;
+        Stroke st{Brush::Draw, {{-6, 0, 20}, {6, 0, 20}}, R, s, {}};
+        apply_stroke(g, st);
+        double top = 20.0;  // find the new surface height above the stroke centre
+        for (double z = 20.0; z < 22.0; z += 0.005)
+            if (g.sample({0, 0, z}) > 0) { top = z; break; }
+        const double rise = top - 20.0;
+        INFO("rise " << rise << " mm, expected ~" << 0.53 * R * s);
+        CHECK(rise > 0.35 * R * s);
+        CHECK(rise < 0.75 * R * s);
+    }
+    // symmetry: a stroke on +x mirrored to -x gives the same field at mirrored points
+    {
+        Grid g = sphere_grid(r, h);
+        StrokeOptions o;
+        o.symmetry = 0, o.sym_at = 0.0;
+        apply_stroke(g, Stroke{Brush::Draw, {{2.5, -1, 5.4}, {2.5, 1, 5.4}}, 1.2, 1.0, o});
+        for (const Vec3& p : {Vec3{2.5, 0, 5.5}, Vec3{2.8, 0.3, 5.3}, Vec3{2.2, -0.4, 5.6}})
+            CHECK(std::abs(g.sample(p) - g.sample({-p.x, p.y, p.z})) < 0.02);
+        CHECK(g.sample({-2.5, 0, 5.5}) < sphere_grid(r, h).sample({-2.5, 0, 5.5}) - 0.1);  // mirrored side changed too
+    }
+    // invert: draw with invert removes material like carve
+    {
+        Grid a = sphere_grid(r, h), b = a;
+        StrokeOptions inv;
+        inv.invert = true;
+        apply_stroke(a, Stroke{Brush::Draw, {{0, -1, r}, {0, 1, r}}, 1.5, 1.0, inv});
+        apply_stroke(b, Stroke{Brush::Carve, {{0, -1, r}, {0, 1, r}}, 1.5, 1.0, {}});
+        CHECK(a.sample({0, 0, r - 0.2}) > 0);
+        CHECK(std::abs(a.sample({0, 0, r - 0.2}) - b.sample({0, 0, r - 0.2})) < 1e-3);
+    }
+}

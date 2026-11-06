@@ -104,7 +104,7 @@ ViewportRenderer::~ViewportRenderer() {
         if (d.mem) df_->vkFreeMemory(dev_, d.mem, nullptr);
     }
     destroy_targets();
-    for (VkPipeline p : {mesh_pipe_, ghost_pipe_, edge_pipe_, grid_pipe_, sky_pipe_})
+    for (VkPipeline p : {mesh_pipe_, ghost_pipe_, edge_pipe_, grid_pipe_, sky_pipe_, smooth_pipe_})
         if (p) df_->vkDestroyPipeline(dev_, p, nullptr);
     for (VkPipelineLayout l : {mesh_layout_, grid_layout_})
         if (l) df_->vkDestroyPipelineLayout(dev_, l, nullptr);
@@ -222,14 +222,16 @@ VkPipeline ViewportRenderer::make_pipeline(const std::uint32_t* vs, std::size_t 
     VkPipelineShaderStageCreateInfo st[2]{};
     st[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, mods[0], "main", nullptr};
     st[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, mods[1], "main", nullptr};
-    VkVertexInputBindingDescription vb{0, 12, VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription va{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
+    // binding 0: positions; binding 1 (smooth pipeline only): normals
+    VkVertexInputBindingDescription vb[2] = {{0, 12, VK_VERTEX_INPUT_RATE_VERTEX}, {1, 12, VK_VERTEX_INPUT_RATE_VERTEX}};
+    VkVertexInputAttributeDescription va[2] = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0}, {1, 1, VK_FORMAT_R32G32B32_SFLOAT, 0}};
     VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     if (vertex_input) {
-        vi.vertexBindingDescriptionCount = 1;
-        vi.pVertexBindingDescriptions = &vb;
-        vi.vertexAttributeDescriptionCount = 1;
-        vi.pVertexAttributeDescriptions = &va;
+        const std::uint32_t nb = vs == spv::mesh_smooth_vert ? 2u : 1u;
+        vi.vertexBindingDescriptionCount = nb;
+        vi.pVertexBindingDescriptions = vb;
+        vi.vertexAttributeDescriptionCount = nb;
+        vi.pVertexAttributeDescriptions = va;
     }
     VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     ia.topology = topo;
@@ -305,6 +307,8 @@ void ViewportRenderer::create_pipelines() {
                                VK_PRIMITIVE_TOPOLOGY_LINE_LIST, true, true, false, GE, rp_, samples_, mesh_layout_);
     grid_pipe_ = make_pipeline(fullscreen_vert, sizeof fullscreen_vert, grid_frag, sizeof grid_frag,
                                VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false, true, false, GE, rp_, samples_, grid_layout_);
+    smooth_pipe_ = make_pipeline(mesh_smooth_vert, sizeof mesh_smooth_vert, mesh_smooth_frag, sizeof mesh_smooth_frag,
+                                 VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, true, false, true, GE, rp_, samples_, mesh_layout_);
     sky_pipe_ = make_pipeline(fullscreen_vert, sizeof fullscreen_vert, sky_frag, sizeof sky_frag,
                               VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, false, false, false, GE, rp_, samples_, grid_layout_);
 }
@@ -448,7 +452,9 @@ void ViewportRenderer::upload_loop() {
         g.tri_off = align4(m.pos.size() * 4);
         g.edge_off = g.tri_off + align4(m.tris.size() * 4);
         g.wire_off = g.edge_off + align4(m.edges.size() * 4);
-        VkDeviceSize total = std::max<VkDeviceSize>(g.wire_off + m.wire.size() * 4, 16);
+        g.nrm_off = g.wire_off + align4(m.wire.size() * 4);
+        g.has_nrm = !m.nrm.empty() && m.nrm.size() == m.pos.size();
+        VkDeviceSize total = std::max<VkDeviceSize>(g.nrm_off + (g.has_nrm ? m.nrm.size() * 4 : 0), 16);
         g.wire_count = std::uint32_t(m.wire.size());
         g.tri_count = std::uint32_t(m.tris.size());
         g.edge_count = std::uint32_t(m.edges.size());
@@ -464,6 +470,7 @@ void ViewportRenderer::upload_loop() {
             std::memcpy(bytes + g.tri_off, m.tris.data(), m.tris.size() * 4);
             std::memcpy(bytes + g.edge_off, m.edges.data(), m.edges.size() * 4);
             std::memcpy(bytes + g.wire_off, m.wire.data(), m.wire.size() * 4);
+            if (g.has_nrm) std::memcpy(bytes + g.nrm_off, m.nrm.data(), m.nrm.size() * 4);
             df_->vkUnmapMemory(dev_, g.host.mem);
         } catch (const std::exception&) {
             destroy_now(g.host);
@@ -625,11 +632,19 @@ void ViewportRenderer::before_rendering() {
             std::memcpy(pc.color, it.color, sizeof pc.color);
         }
         pc.params[0] = it.highlight;
+        const bool smooth = pass == Faces && pipe == mesh_pipe_ && g.has_nrm;
+        if (smooth) pipe = smooth_pipe_;
         df_->vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
         df_->vkCmdPushConstants(cb, mesh_layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                 sizeof pc, &pc);
-        VkDeviceSize vo = g.pos_off;
-        df_->vkCmdBindVertexBuffers(cb, 0, 1, &buf, &vo);
+        if (smooth) {
+            VkBuffer bufs[2] = {buf, buf};
+            VkDeviceSize offs[2] = {g.pos_off, g.nrm_off};
+            df_->vkCmdBindVertexBuffers(cb, 0, 2, bufs, offs);
+        } else {
+            VkDeviceSize vo = g.pos_off;
+            df_->vkCmdBindVertexBuffers(cb, 0, 1, &buf, &vo);
+        }
         df_->vkCmdBindIndexBuffer(cb, buf, ioff, VK_INDEX_TYPE_UINT32);
         df_->vkCmdDrawIndexed(cb, count, 1, 0, 0, 0);
         if (!lines) tris += g.tri_count / 3;
