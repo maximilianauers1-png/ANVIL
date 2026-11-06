@@ -21,3 +21,4 @@ Format: Kontext · Entscheidung · Alternativen · Messung. Eine Entscheidung
 | [0014](0014-upgradefaehigkeit.md) | Upgradefähigkeit (Formate, API, Plugins, Offline-Updates) | – |
 | [0015](0015-m1-abweichungen.md) | Abweichungen/Präzisierungen in M1 mit Messwerten | – |
 | [0016](0016-m2-skizzen-worker-bedienung.md) | M2: Skizzen-Solver, B-Rep-Worker, gemischte Auswertung, Zeichenbedienung | – |
+| [0017](0017-m3-sculpting.md) | M3: Sculpting auf Sparse-Brick-SDFs, Abweichungen mit Messwerten | –  |

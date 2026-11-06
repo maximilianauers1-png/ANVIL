@@ -61,6 +61,14 @@ $cj = Join-Path $env:TEMP "anvil_core.json"
 & (Join-Path $dist "anvil-bench.exe") $scene --repeat 3 --out $cj | Out-Host
 $res.core = Get-Content $cj | ConvertFrom-Json
 
+# G6 sculpt latency, CPU part (24 M active voxels, 60 Hz pointer samples)
+$res.sculpt = (& (Join-Path $dist "anvil-sculpt-bench.exe") | Out-String) | ConvertFrom-Json
+# M2 kernel (B-Rep worker, sketch solver, solidify)
+$m2 = Join-Path $env:TEMP "anvil_m2.json"
+$env:ANVIL_BENCH_OUT = $m2
+& (Join-Path $dist "anvil-cli.exe") (Join-Path $root "bench\m2_bench.py") | Out-Host
+$res.m2 = Get-Content $m2 | ConvertFrom-Json
+
 $json = Join-Path $reports "M1-windows-$stamp.json"
 $res | ConvertTo-Json -Depth 6 | Set-Content $json
 $p99 = ($g1 | ForEach-Object { $_.cpu_present_interval_ms.p99 } | Measure-Object -Maximum).Maximum
@@ -72,7 +80,9 @@ $md = @"
 | G1 Viewport p99 (BS-5M, $Frames Frames x $Runs) | $([math]::Round($p99,2)) ms | <= 16.7 ms | $(if ($p99 -le 16.7) {'erfuellt'} else {'VERFEHLT'}) |
 | G2 Radialmenue sichtbar | $($res.G2_radial_frames) Frame(s) | <= 1 | $(if ($res.G2_radial_frames -le 1) {'erfuellt'} else {'VERFEHLT'}) |
 | G3 Kaltstart (Median) | $($res.G3_startup_ms.median) ms | < 3000 ms | $(if ($res.G3_startup_ms.median -lt 3000) {'erfuellt'} else {'VERFEHLT'}) |
-| UI-Abnahme Magnetbasis | $($res.selftest_ok) | true | |
+| UI-Abnahme (alle Selbsttest-Schritte) | $($res.selftest_ok) | true | |
+| G6 Sculpt Draw, Engine pro Frame p99 | $($res.sculpt.strokes[0].p99_ms) ms | <= 33.3 ms (2 Frames) | $(if ($res.sculpt.strokes[0].p99_ms -le 33.3) {'erfuellt'} else {'VERFEHLT'}) |
+| G6 Sculpt Grab, Engine pro Frame p99 | $($res.sculpt.strokes[2].p99_ms) ms | <= 33.3 ms (2 Frames) | $(if ($res.sculpt.strokes[2].p99_ms -le 33.3) {'erfuellt'} else {'VERFEHLT'}) |
 
 GPU: $($res.gpu)  ·  CPU: $($res.cpu)  ·  Display: $($res.display)
 Rohdaten: $(Split-Path -Leaf $json)

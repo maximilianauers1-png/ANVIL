@@ -1,6 +1,6 @@
 # ADR 0008 – SDF-Kern: Sparse-Brick-Grid
 
-Status: vorgeschlagen · Gate: G6 (M3) · offene Rückfrage F4
+Status: umgesetzt mit Abweichungen (ADR 0017) · Gate: G6 (M3)
 
 ## Entscheidung
 - Bricks 8³ Voxel (+1 Voxel Apron für Gradienten/DC), Werte fp16 als
