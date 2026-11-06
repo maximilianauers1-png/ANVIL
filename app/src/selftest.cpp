@@ -254,12 +254,33 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
             mouseRelease(b, Qt::LeftButton);
         }
     }, [this] {
+        if (view_->missingMeshes() > view_->missingNewMeshes()) ++flicker_samples_;  // a shown chunk must never blink out
         auto h = app_->history();
         if (!idle() || h.size() < hist_before_ + 2) return false;
         const QString last = h.back().toMap()["source"].toString(), prev = h[h.size() - 2].toMap()["source"].toString();
         return last.contains("\"clay\"") && prev.contains("\"clay\"") && last.contains("symmetry=\"x\"") &&
                objectValue("Cylinder1", "volume") > vol_before_ + 0.1 && view_->sculptObjects().contains("Cylinder1");
     }, 60000);
+    add("no flicker during strokes", [this] { check(flicker_samples_ == 0, QString("sculpt chunks stayed visible during live strokes (%1 ticks with missing meshes, last %2)").arg(flicker_samples_).arg(view_->missingMeshes())); });
+    add("texture stroke (scales), immediately repeated", [this] {
+        vol_before_ = objectValue("Cylinder1", "volume");
+        hist_before_ = app_->history().size();
+        view_->setProperty("sculptBrush", "texture");
+        view_->setProperty("sculptSymmetry", "");
+        for (double x : {-6.0, -2.0, 2.0}) {
+            QPointF a = project(x, -3, 3), b = project(x + 3, 3, 3);
+            mouseMove(a);
+            mousePress(a, Qt::LeftButton);
+            for (int i = 1; i <= 10; ++i) mouseMove(a + (b - a) * (i / 10.0), Qt::LeftButton);
+            mouseRelease(b, Qt::LeftButton);
+        }
+    }, [this] {
+        if (view_->missingMeshes() > view_->missingNewMeshes()) ++flicker_samples_;
+        auto h = app_->history();
+        return idle() && h.size() >= hist_before_ + 3 && h.back().toMap()["source"].toString().contains("\"texture\"") &&
+               view_->missingMeshes() == 0;
+    }, 60000);
+    add("no flicker during texture strokes", [this] { check(flicker_samples_ == 0, "chunks stayed visible during texture strokes"); });
     add("iso view for sculpt", [this] { app_->requestView("iso"); }, [this] { return idle(); });
     add("screenshot sculpt", [this] { screenshot("12_sculpt"); });
     add("back to Design", [this] { app_->setMode("Design"); }, [this] { return !view_->sculptMode(); });

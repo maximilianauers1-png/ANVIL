@@ -146,6 +146,9 @@ class ViewportItem : public QQuickItem {
     double frameP99() const { return p99_; }
     double gpuMs() const { return stats_->gpu_ms; }
     qulonglong triangles() const { return stats_->triangles; }
+    /// Draw items with nothing to show in the last frame (upload pending, no previous mesh): flicker.
+    Q_INVOKABLE qulonglong missingMeshes() const { return stats_->missing; }
+    Q_INVOKABLE qulonglong missingNewMeshes() const { return stats_->missing_new; }
     qulonglong gpuBytes() const { return stats_->gpu_bytes; }
     qulonglong vramTotal() const { return stats_->device_local_budget; }
     QString deviceName() const { return QString::fromStdString(stats_->device_name); }

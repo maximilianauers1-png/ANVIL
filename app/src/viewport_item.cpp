@@ -165,22 +165,29 @@ void ViewportItem::sync() {
             bool sel = selection_.contains(qn) || (tool_ == "pick" && picked_tools_.contains(qn));
             item.highlight = sel ? 1.f : 0.f;
             if (sel && tool_ == "move" && base_) item.extra_offset = snap_.point - *base_;
+            const std::uint64_t oslot = std::hash<std::string>()(o.name) | 1;  // nonzero
             if (o.gpu) {
+                item.slot = oslot;
                 in.items.push_back(item);
                 continue;
             }
             // sculpt parts; chunks of a running stroke replace their evaluated version
             item.edges = false;
             const LiveParts* live = live_.object == o.name ? &live_ : nullptr;
+            // slot per chunk: live and evaluated versions of a chunk share it
+            auto chunk_slot = [&](std::uint64_t ck) { return (oslot ^ (ck * 0x9E3779B97F4A7C15ull)) | 1; };
             for (std::size_t i = 0; i < o.parts.size(); ++i) {
-                if (live && live->chunks.count(sdf_chunk_key(o.part_chunks[i]))) continue;
+                const std::uint64_t ck = sdf_chunk_key(o.part_chunks[i]);
+                if (live && live->chunks.count(ck)) continue;
                 item.mesh = o.parts[i];
+                item.slot = chunk_slot(ck);
                 in.items.push_back(item);
             }
             if (live)
                 for (const auto& [k, m] : live->chunks)
                     if (m) {
                         item.mesh = m;
+                        item.slot = chunk_slot(k);
                         in.items.push_back(item);
                     }
         }
@@ -266,9 +273,17 @@ void ViewportItem::setScene(std::shared_ptr<const Scene> s) {
     }
     // a finished stroke stays visible until its command's evaluation arrives
     if (live_.done && scene_) {
+        // committed once the object's root carries the finished stroke: compare
+        // stroke counts (chained strokes are built on a node of our own, so the
+        // root pointer never matches; an earlier stroke's result must not
+        // drop the newer live chunks)
+        const std::size_t want = expected_root_ && expected_root_->sculpt ? expected_root_->sculpt->strokes.size() : 0;
         bool committed = true;
         for (const auto& o : scene_->objects)
-            if (o.name == live_.object && o.root == stroke_root_) committed = false;
+            if (o.name == live_.object) {
+                const bool sculpt = o.root && o.root->kind == NodeKind::Sculpt;
+                if (o.root == stroke_root_ || (want && sculpt && o.root->sculpt->strokes.size() < want)) committed = false;
+            }
         if (committed) {
             live_ = LiveParts{};
             pending_grid_.reset();

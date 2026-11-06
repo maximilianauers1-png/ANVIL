@@ -47,6 +47,10 @@ struct DrawItem {
     Vec3 extra_offset{};        // e.g. move-tool preview
     bool ghost = false;         // translucent, no depth write (previews)
     bool edges = true;
+    // Stable identity of what this item shows (object, or object + sculpt chunk).
+    // While a new mesh for a slot is still uploading, the slot's previous mesh
+    // is drawn instead of nothing (no flicker on edits and live strokes).
+    std::uint64_t slot = 0;
 };
 
 struct FrameInput {
@@ -70,6 +74,8 @@ struct FrameInput {
 struct RendererStats {
     std::atomic<double> gpu_ms{0};
     std::atomic<std::uint64_t> triangles{0};
+    std::atomic<std::uint64_t> missing{0};
+    std::atomic<std::uint64_t> missing_new{0};  // of which: slots never drawn before (new chunk / object)     // items drawn with no mesh at all in the last frame (upload pending, no fallback)
     std::atomic<std::uint64_t> frames{0};
     std::atomic<std::uint64_t> gpu_bytes{0};
     std::atomic<std::uint64_t> device_local_budget{0};  // bytes of the largest device-local heap
@@ -104,6 +110,7 @@ class ViewportRenderer {
         bool has_nrm = false;
         std::uint32_t tri_count = 0, edge_count = 0, wire_count = 0;
         std::uint64_t last_used = 0;
+        Vec3 origin{};              // MeshCpu::origin (positions are relative to it)
     };
     struct Upload {
         std::shared_ptr<const MeshCpu> mesh;
@@ -153,6 +160,7 @@ class ViewportRenderer {
     bool drew_offscreen_ = false;
 
     std::unordered_map<std::uint64_t, GpuMesh> meshes_;
+    std::unordered_map<std::uint64_t, std::uint64_t> slot_key_;  // slot -> mesh key last drawn there
     std::uint64_t frame_ = 0;
     struct Dead {
         std::uint64_t frame;

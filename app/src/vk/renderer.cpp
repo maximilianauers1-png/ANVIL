@@ -458,6 +458,7 @@ void ViewportRenderer::upload_loop() {
         g.wire_count = std::uint32_t(m.wire.size());
         g.tri_count = std::uint32_t(m.tris.size());
         g.edge_count = std::uint32_t(m.edges.size());
+        g.origin = m.origin;
         try {
             g.host = make_buffer(total,
                                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
@@ -547,7 +548,7 @@ void ViewportRenderer::before_rendering() {
     collect_finished_uploads(cb);
 
     // request uploads for meshes we do not have yet; evict unused ones
-    std::uint64_t tris = 0;
+    std::uint64_t tris = 0, missing = 0, missing_new = 0;
     {
         std::lock_guard lk(up_mu_);
         for (const auto& it : in_.items) {
@@ -555,8 +556,16 @@ void ViewportRenderer::before_rendering() {
             auto m = meshes_.find(it.mesh->key);
             if (m != meshes_.end()) {
                 m->second.last_used = frame_;
+                if (it.slot) slot_key_[it.slot] = it.mesh->key;
                 continue;
             }
+            // not resident yet: the slot's previous mesh stands in (and must not be evicted)
+            bool stand_in = false;
+            if (it.slot && !slot_key_.count(it.slot)) ++missing_new;
+            if (it.slot)
+                if (auto sk = slot_key_.find(it.slot); sk != slot_key_.end())
+                    if (auto pm = meshes_.find(sk->second); pm != meshes_.end()) pm->second.last_used = frame_, stand_in = true;
+            if (!stand_in) ++missing;
             if (!up_pending_.count(it.mesh->key)) {
                 up_pending_[it.mesh->key] = true;
                 up_queue_.push_back({it.mesh});
@@ -564,6 +573,12 @@ void ViewportRenderer::before_rendering() {
         }
     }
     up_cv_.notify_one();
+    stats_->missing = missing;
+    stats_->missing_new = missing_new;
+    std::erase_if(slot_key_, [&](const auto& sk) {
+        auto m = meshes_.find(sk.second);
+        return m == meshes_.end() || frame_ - m->second.last_used > kEvictFrames;
+    });
     for (auto it = meshes_.begin(); it != meshes_.end();) {
         if (frame_ - it->second.last_used > kEvictFrames) {
             destroy_later(it->second.host);
@@ -611,6 +626,10 @@ void ViewportRenderer::before_rendering() {
     enum Pass { Faces, Features, Wire };
     auto draw = [&](const DrawItem& it, VkPipeline pipe, Pass pass) {
         auto m = meshes_.find(it.mesh->key);
+        if (m == meshes_.end() && it.slot) {  // still uploading: keep showing the slot's previous mesh
+            auto sk = slot_key_.find(it.slot);
+            if (sk != slot_key_.end()) m = meshes_.find(sk->second);
+        }
         if (m == meshes_.end()) return;
         const GpuMesh& g = m->second;
         const bool lines = pass != Faces;
@@ -620,7 +639,7 @@ void ViewportRenderer::before_rendering() {
         VkBuffer buf = g.dev.buf ? g.dev.buf : g.host.buf;
         MeshPC pc{};
         to_float(VP, pc.viewProj);
-        Vec3 off = it.mesh->origin + it.extra_offset - eye;  // double, then float (camera-relative)
+        Vec3 off = g.origin + it.extra_offset - eye;  // double, then float (camera-relative)
         pc.offset[0] = float(off.x), pc.offset[1] = float(off.y), pc.offset[2] = float(off.z);
         if (lines) {
             std::memcpy(pc.color, pass == Wire ? in_.wire : in_.edge, sizeof pc.color);
