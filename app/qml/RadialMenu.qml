@@ -16,20 +16,43 @@ Item {
     readonly property real r0: Theme.radialInner
     readonly property real r1: Theme.radialOuter
 
-    // dead zone
-    Rectangle {
-        x: root.cx - root.r0 + 6
-        y: root.cy - root.r0 + 6
-        width: 2 * (root.r0 - 6)
-        height: width
-        radius: width / 2
-        color: Theme.radialFill
-        border.color: Theme.borderStrong
-        Text {
-            anchors.centerIn: parent
-            text: root.view.radialPath.length > 0 ? "◂" : "×"
-            color: Theme.textDim
-            font.pixelSize: 14
+    // gear body: opaque steel ring with teeth around the rim (independent of
+    // the items, built once). Always dark so the light labels read over any
+    // viewport colour.
+    readonly property int teeth: 24
+    readonly property real toothH: 11
+    function gearOutline() {
+        var pts = [], N = root.teeth, ri = root.r1 + 2, ro = root.r1 + root.toothH
+        for (var k = 0; k < N; ++k) {
+            var a = 2 * Math.PI * k / N, w = Math.PI / N
+            // tooth: flank up, flat top, flank down (trapezoid, 45 % of the pitch on top)
+            var a0 = a - w, a1 = a - 0.45 * w, a2 = a + 0.45 * w, a3 = a + w
+            pts.push(Qt.point(root.cx + ri * Math.cos(a0), root.cy + ri * Math.sin(a0)))
+            pts.push(Qt.point(root.cx + ro * Math.cos(a1), root.cy + ro * Math.sin(a1)))
+            pts.push(Qt.point(root.cx + ro * Math.cos(a2), root.cy + ro * Math.sin(a2)))
+            pts.push(Qt.point(root.cx + ri * Math.cos(a3), root.cy + ri * Math.sin(a3)))
+        }
+        pts.push(pts[0])
+        return pts
+    }
+    Shape {
+        anchors.fill: parent
+        // soft shadow under the gear
+        ShapePath {
+            strokeWidth: -1
+            fillColor: Qt.rgba(0, 0, 0, 0.35)
+            PathAngleArc { centerX: root.cx + 3; centerY: root.cy + 5; radiusX: root.r1 + root.toothH + 4; radiusY: root.r1 + root.toothH + 4; startAngle: 0; sweepAngle: 360; moveToStart: true }
+        }
+        ShapePath {
+            strokeColor: Theme.gearEdge
+            strokeWidth: 1.5
+            fillGradient: RadialGradient {
+                centerX: root.cx; centerY: root.cy; centerRadius: root.r1 + root.toothH
+                focalX: root.cx - 30; focalY: root.cy - 40
+                GradientStop { position: 0.0; color: Theme.gearLight }
+                GradientStop { position: 1.0; color: Theme.gearDark }
+            }
+            PathPolyline { path: root.visible ? root.gearOutline() : [] }
         }
     }
 
@@ -45,9 +68,9 @@ Item {
             Shape {
                 anchors.fill: parent
                 ShapePath {
-                    strokeColor: Theme.border
-                    strokeWidth: 1
-                    fillColor: sector.hot && sector.item.enabled ? Theme.accent : Theme.radialFill
+                    strokeColor: Theme.gearGroove
+                    strokeWidth: 2
+                    fillColor: sector.hot && sector.item.enabled ? Theme.accent : sector.hot ? Theme.gearFaceHot : Theme.gearFace
                     PathAngleArc {
                         centerX: root.cx; centerY: root.cy
                         radiusX: root.r1; radiusY: root.r1
@@ -77,9 +100,36 @@ Item {
                 text: sector.item.label
                 font.family: Theme.font
                 font.pixelSize: Theme.fontSize
-                font.bold: sector.hot
-                color: !sector.item.enabled ? Theme.radialDisabled : sector.hot ? Theme.accentText : Theme.text
+                font.bold: true
+                color: !sector.item.enabled ? Theme.gearTextDisabled : sector.hot ? Theme.accentText : Theme.gearText
+                style: sector.hot && sector.item.enabled ? Text.Normal : Text.Outline
+                styleColor: Theme.gearDark
             }
+        }
+    }
+    // hub: the dead zone (release here = cancel; ◂ = back out of a submenu)
+    Rectangle {
+        x: root.cx - root.r0 + 4
+        y: root.cy - root.r0 + 4
+        width: 2 * (root.r0 - 4)
+        height: width
+        radius: width / 2
+        color: Theme.gearLight
+        border.color: Theme.gearEdge
+        border.width: 2
+        Rectangle {
+            anchors.centerIn: parent
+            width: parent.width * 0.62; height: width; radius: width / 2
+            color: Theme.gearDark
+            border.color: Theme.gearGroove
+            border.width: 2
+        }
+        Text {
+            anchors.centerIn: parent
+            text: root.view.radialPath.length > 0 ? "◂" : "×"
+            color: Theme.gearText
+            font.pixelSize: 15
+            font.bold: true
         }
     }
     // help line for the highlighted command
@@ -88,12 +138,12 @@ Item {
                                   ? root.items[root.view.radialHighlight] : null
         visible: it !== null && (it.help || "") !== ""
         x: root.cx - width / 2
-        y: root.cy + root.r1 + 10
         text: it ? (it.enabled ? (it.help || "") : (it.help || "") + "  (not applicable to the selection)") : ""
-        color: Theme.textDim
-        font.pixelSize: Theme.fontSmall
+        color: Theme.gearText
+        font.pixelSize: Theme.fontSmall + 1
         font.family: Theme.font
+        y: root.cy + root.r1 + root.toothH + 12
         style: Text.Outline
-        styleColor: Theme.bg
+        styleColor: "#000000"
     }
 }

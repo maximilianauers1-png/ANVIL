@@ -73,4 +73,13 @@ QtObject {
     readonly property int radialOuter: 128
     readonly property color radialFill: darkUi ? Qt.rgba(0.09, 0.10, 0.12, 0.94) : Qt.rgba(0.93, 0.94, 0.95, 0.96)
     readonly property color radialDisabled: darkUi ? "#4a5059" : "#9aa1aa"
+    // gear wheel (radial menu): opaque brushed steel, the same in every theme
+    readonly property color gearLight: "#4a515c"
+    readonly property color gearDark: "#1b1e23"
+    readonly property color gearEdge: "#7a838f"
+    readonly property color gearGroove: "#0c0e11"
+    readonly property color gearFace: "#262a31"
+    readonly property color gearFaceHot: "#343a43"
+    readonly property color gearText: "#f4f6f8"
+    readonly property color gearTextDisabled: "#79818c"
 }

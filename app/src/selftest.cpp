@@ -53,9 +53,15 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
         radial_press_frame_ = frames_;
         mousePress(p, Qt::RightButton);
     }, [this] { return radial_frames_ >= 0; });
+    add("highlight a sector", [this] {
+        QPointF p = project(40, 40, 0);
+        mouseMove(p + QPointF(60, -35), Qt::RightButton);
+    }, [this] { return view_->radialHighlight() >= 0; });
+    add("screenshot radial gear", [this] { screenshot("02_radial"); });
     add("cancel held radial", [this] {
         check(radial_frames_ <= 1, QString("radial menu visible after %1 frame(s)").arg(radial_frames_));
         QPointF p = project(40, 40, 0);
+        mouseMove(p, Qt::RightButton);
         mouseRelease(p, Qt::RightButton);  // released in the dead zone = cancel
     }, [this] { return !view_->radialActive(); });
 
