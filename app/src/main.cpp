@@ -151,6 +151,35 @@ int main(int argc, char** argv) {
     const QString sessions = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/sessions";
     const QString session_dir = sessions + "/" + QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss-zzz") + "-" +
                                 QString::number(QCoreApplication::applicationPid());
+#ifdef _WIN32
+    // Python exits the process without a message when it finds no standard
+    // library. Check the isolated search path (ANVIL._pth) first and say why.
+    {
+        const QDir exe(QCoreApplication::applicationDirPath());
+        QFile pth(exe.filePath("ANVIL._pth"));
+        if (pth.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            bool stdlib = false;
+            QStringList tried;
+            for (QString line : QString::fromUtf8(pth.readAll()).split('\n')) {
+                line = line.trimmed();
+                if (line.isEmpty() || line.startsWith('#')) continue;
+                const QString path = QDir::isAbsolutePath(line) ? line : exe.filePath(line);
+                tried << QDir::toNativeSeparators(path);
+                const QFileInfo fi(path);
+                if ((fi.isFile() && path.endsWith(".zip", Qt::CaseInsensitive)) ||
+                    QFileInfo(path + "/encodings/__init__.py").isFile())
+                    stdlib = true;
+            }
+            if (!stdlib)
+                return fatal(3, "The Python 3.11 standard library was not found.\n\nSearched (ANVIL._pth):\n" +
+                                    tried.join("\n") +
+                                    "\n\nThe package is incomplete or ANVIL._pth was edited. Unpack the "
+                                    "ANVIL-windows-x64 download again into an empty folder.");
+        }
+        if (!QFileInfo(exe.filePath("python311.dll")).isFile())
+            qWarning("python311.dll is not next to ANVIL.exe; Windows will search PATH for it");
+    }
+#endif
     anvil::SessionOptions opt;
     opt.python_dir = anvil::default_python_dir();
     opt.plugin_dir = (QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + "/plugins").toStdString();
