@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls
 import Anvil.Native
 
 Rectangle {
@@ -34,6 +35,14 @@ Rectangle {
                   + (bar.view.gpuMs > 0 ? "  ·  GPU " + bar.view.gpuMs.toFixed(2) + " ms" : "")
             font.pixelSize: Theme.fontSmall
             color: bar.view.frameP99 > 16.7 ? Theme.warn : Theme.textDim
+        }
+        ALabel {
+            text: "RAM " + bar.mb(App.processMemory)
+            dim: true
+            font.pixelSize: Theme.fontSmall
+            ToolTip.visible: ramMa.containsMouse
+            ToolTip.text: "Memory of ANVIL. Click: free cached geometry (results are recomputed when needed)"
+            MouseArea { id: ramMa; anchors.fill: parent; hoverEnabled: true; onClicked: App.runCommand("app.free_memory") }
         }
         ALabel {
             text: "VRAM " + bar.mb(bar.view.gpuBytes) + " / " + bar.gb(bar.view.vramTotal)

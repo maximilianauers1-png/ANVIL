@@ -5,6 +5,9 @@
 #include <pybind11/stl/filesystem.h>
 
 #include <filesystem>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 #include "anvil/geometry.hpp"
 #include "anvil/model_io.hpp"
@@ -379,6 +382,40 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         return std::make_tuple(NodeHandle{make_model(asset, path, h, to_params(p))}, h);
     });
     m.def("weapon_types", [] { return weapon::types(); });
+    // memory of the evaluation caches (bytes are estimates)
+    m.def("cache_stats", [] {
+        py::dict d;
+        d["shapes"] = S().cache().size();
+        d["shape_bytes"] = S().cache().bytes();
+        auto [cn, cb] = sdf::chunk_cache_stats();
+        d["chunks"] = cn;
+        d["chunk_bytes"] = cb;
+        return d;
+    });
+    m.def("free_memory", [] {
+        const std::size_t before = S().cache().bytes() + sdf::chunk_cache_stats().second;
+        S().cache().clear();
+        sdf::clear_chunk_cache();
+        clear_sculpt_cache();
+#if defined(__GLIBC__)
+        malloc_trim(0);  // return freed heap pages to the OS (glibc keeps them otherwise)
+#endif
+        return before;
+    });
+    m.def("shape_bytes", [](const NodeHandle& n) {
+        auto sh = eval_node(n, tol::kDefaultChordMm);
+        py::dict d;
+        d["total"] = shape_bytes(*sh);
+        d["mesh_tris"] = sh->mesh ? sh->mesh->F.size() : 0;
+        d["bricks"] = sh->grid ? sh->grid->brick_count() : 0;
+        d["chunks"] = sh->chunks.size();
+        std::size_t cb = 0, cv = 0;
+        for (const auto& c : sh->chunks) cb += c->mesh.F.size(), cv += c->mesh.V.size();
+        d["chunk_tris"] = cb;
+        d["chunk_verts"] = cv;
+        d["solid"] = bool(sh->solid);
+        return d;
+    });
     m.def("weapon_defaults", [](const std::string& type, double height) {
         const auto w = weapon::defaults(type, height);
         py::dict d;

@@ -1489,7 +1489,30 @@ struct ChunkCache {
     std::mutex mu;
     std::unordered_map<std::uint64_t, std::pair<std::uint64_t, std::shared_ptr<const ChunkMesh>>> map;
     std::uint64_t tick = 0;
+    std::size_t bytes = 0;
     static constexpr std::size_t kMax = 40000;
+    // dense clay: ~10k triangles (~1 MB) per chunk, so 40000 chunks could reach
+    // tens of GB; the byte budget bounds it (meshes still shown stay alive)
+    static constexpr std::size_t kBudgetBytes = std::size_t(512) << 20;  // 512 MiB
+    static std::size_t size_of(const ChunkMesh& c) {
+        return sizeof(ChunkMesh) + c.mesh.V.capacity() * sizeof(Vec3) + c.mesh.F.capacity() * sizeof(Tri) +
+               c.cell.capacity() * 8 + c.normal.capacity() * sizeof(c.normal[0]);
+    }
+    void insert(std::uint64_t key, std::shared_ptr<const ChunkMesh> cm) {  // mu held
+        if (auto it = map.find(key); it != map.end()) bytes -= size_of(*it->second.second);
+        bytes += size_of(*cm);
+        map[key] = {++tick, std::move(cm)};
+        if (map.size() > kMax || bytes > kBudgetBytes) {  // drop the oldest quarter
+            std::vector<std::pair<std::uint64_t, std::uint64_t>> ages;
+            for (const auto& [k, v] : map) ages.push_back({v.first, k});
+            std::nth_element(ages.begin(), ages.begin() + ages.size() / 4, ages.end());
+            for (std::size_t i = 0; i < ages.size() / 4; ++i) {
+                auto it = map.find(ages[i].second);
+                bytes -= size_of(*it->second.second);
+                map.erase(it);
+            }
+        }
+    }
 };
 ChunkCache& chunk_cache() {
     static ChunkCache c;
@@ -1577,7 +1600,8 @@ std::shared_ptr<const ChunkMesh> build_chunk(const Grid& g, const IVec3& chunk, 
                             gsum += gc * ((cx ? u : 1 - u) * (cy ? vv : 1 - vv) * (cz ? ww : 1 - ww));
                         }
                         const double gl = norm(gsum);
-                        cm->normal.push_back(gl > 0 ? gsum / gl : Vec3{0, 0, 1});
+                        const Vec3 nv = gl > 0 ? gsum / gl : Vec3{0, 0, 1};
+                        cm->normal.push_back({float(nv.x), float(nv.y), float(nv.z)});
                     }
                     return slot = std::int32_t(out.V.size() - 1);
                 };
@@ -1617,6 +1641,19 @@ std::shared_ptr<const ChunkMesh> build_chunk(const Grid& g, const IVec3& chunk, 
 }
 }  // namespace
 
+void clear_chunk_cache() {
+    auto& cc = chunk_cache();
+    std::lock_guard lk(cc.mu);
+    cc.map.clear();
+    cc.bytes = 0;
+}
+
+std::pair<std::size_t, std::size_t> chunk_cache_stats() {
+    auto& cc = chunk_cache();
+    std::lock_guard lk(cc.mu);
+    return {cc.map.size(), cc.bytes};
+}
+
 std::shared_ptr<const ChunkMesh> chunk_mesh(const Grid& g, const IVec3& chunk) {
     const std::uint64_t key = g.chunk_key(chunk);
     auto& cc = chunk_cache();
@@ -1630,13 +1667,7 @@ std::shared_ptr<const ChunkMesh> chunk_mesh(const Grid& g, const IVec3& chunk) {
     }
     auto cm = build_chunk(g, chunk, key);
     std::lock_guard lk(cc.mu);
-    cc.map[key] = {++cc.tick, cm};
-    if (cc.map.size() > ChunkCache::kMax) {  // drop the oldest quarter
-        std::vector<std::pair<std::uint64_t, std::uint64_t>> ages;
-        for (const auto& [k, v] : cc.map) ages.push_back({v.first, k});
-        std::nth_element(ages.begin(), ages.begin() + ages.size() / 4, ages.end());
-        for (std::size_t i = 0; i < ages.size() / 4; ++i) cc.map.erase(ages[i].second);
-    }
+    cc.insert(key, cm);
     return cm;
 }
 

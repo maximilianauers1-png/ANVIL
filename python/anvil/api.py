@@ -24,7 +24,7 @@ from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 __all__ = [
     "figure", "mini_base", "pose", "on_base", "unique_name",
     "import_model", "model_file", "model_info", "weapon", "attach", "equip", "merge", "WEAPONS",
-    "cut", "knife", "lasso_cut", "drill", "slice_cut",
+    "cut", "knife", "lasso_cut", "drill", "slice_cut", "free_memory",
     "tube", "prism", "pyramid", "capsule", "rounded_box", "wedge", "ellipsoid", "star",
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
@@ -544,6 +544,13 @@ def slice_cut(obj, point, normal=(0, 0, 1), keep: str = "above", name: str = Non
     keep 'above' (the side the normal points to), 'below' or 'both'.
     Example: slice_cut("Mini", (0, 0, 0.3)) gives a flat bottom at z = 0.3 mm."""
     return _cut_object(obj, [tuple(point)], normal, "plane", keep, ("above", "below"), name)
+
+
+def free_memory() -> str:
+    """Empties the evaluation caches (results are recomputed when needed); the
+    document and undo history are unchanged. Returns what was released."""
+    n = _a.free_memory()
+    return f"released about {n / 2**20:.0f} MB of cached geometry"
 
 
 def unique_name(prefix: str) -> str:

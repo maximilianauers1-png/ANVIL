@@ -48,6 +48,7 @@ class AppController : public QObject {
     Q_PROPERTY(bool recoveryAvailable READ recoveryAvailable NOTIFY recoveryChanged)
     Q_PROPERTY(QString recoveryInfo READ recoveryInfo NOTIFY recoveryChanged)
     Q_PROPERTY(QString autosaveInfo READ autosaveInfo NOTIFY autosaveChanged)
+    Q_PROPERTY(double processMemory READ processMemory NOTIFY memoryChanged)  // bytes (resident / working set)
     Q_PROPERTY(double startupMs READ startupMs NOTIFY startupMeasured)
     Q_PROPERTY(double chordMm READ chordMm CONSTANT)
     Q_PROPERTY(QString radialKey READ radialKey CONSTANT)
@@ -107,6 +108,7 @@ class AppController : public QObject {
     Q_INVOKABLE void setParam(const QString& name, const QString& path, const QString& key, const QString& text);
     Q_INVOKABLE void setVariable(const QString& name, const QString& text);
     Q_INVOKABLE QString formatLength(double mm) const;
+    double processMemory() const;
     Q_INVOKABLE QString formatPoint(const QVector3D& p) const;
     Q_INVOKABLE QString validateField(const QString& text, const QString& dim = "Length") const;  // "" or an error
     /// Live ghost of an object with one parameter changed (no document change).
@@ -164,6 +166,7 @@ class AppController : public QObject {
     Q_INVOKABLE double sculptVoxel(const QString& name) const;  // part the sketch was drawn on ("" = unknown)
 
   signals:
+    void memoryChanged();
     void documentChanged();
     void selectionChanged();
     void unitChanged();

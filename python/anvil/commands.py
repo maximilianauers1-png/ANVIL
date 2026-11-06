@@ -101,6 +101,13 @@ def _names(ctx: Context) -> str:
 
 # --------------------------------------------------------------------------- built-ins
 
+@command("app.free_memory", "Free memory (clear caches)", "View",
+         "Empty the geometry caches; the document and undo history stay; results are recomputed when needed",
+         keywords="ram memory cache clear purge")
+def _(ctx):
+    return "print(free_memory())"
+
+
 @command("create.cylinder", "Cylinder", "Create", "Cylinder on the snapped point (d 20 mm, h 10 mm)",
          keywords="primitive round disc base")
 def _(ctx):

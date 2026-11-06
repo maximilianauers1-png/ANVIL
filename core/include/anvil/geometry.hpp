@@ -194,19 +194,37 @@ std::string brep_json(const NodePtr& n, const VariableResolver& vars, const Eval
 /// Content-addressed evaluation cache (thread-safe). Key = SHA-256 of the
 /// resolved canonical description + chord, so equal parameters give the
 /// same (bit-identical) mesh.
+/// Approximate heap memory of a shape (meshes, grid bricks, chunk meshes,
+/// Manifold solid); used for the cache budget.
+std::size_t shape_bytes(const Shape& s);
+/// Drops the process-wide sculpt-stroke grid cache (results are recomputed on demand).
+void clear_sculpt_cache();
+
+/// Least-recently-used eviction by entry count and by memory: one merged
+/// 32 mm mini at 50 um is ~0.3 GB, so a count limit alone does not bound RAM.
+/// Shapes still shown or referenced elsewhere stay alive through their owners.
+inline constexpr std::size_t kShapeCacheBudgetBytes = std::size_t(1024) << 20;  // 1 GiB
+
 class ShapeCache {
   public:
-    explicit ShapeCache(std::size_t max_entries = 256) : max_(max_entries) {}
+    explicit ShapeCache(std::size_t max_entries = 256, std::size_t budget_bytes = kShapeCacheBudgetBytes)
+        : max_(max_entries), budget_(budget_bytes) {}
     std::shared_ptr<const Shape> get(const std::string& key);
     void put(const std::string& key, std::shared_ptr<const Shape> s);
     std::size_t size() const;
+    std::size_t bytes() const;
     void clear();
 
   private:
+    struct Entry {
+        std::uint64_t tick = 0;
+        std::shared_ptr<const Shape> shape;
+        std::size_t bytes = 0;
+    };
     mutable std::mutex mu_;
-    std::size_t max_;
+    std::size_t max_, budget_, bytes_ = 0;
     std::uint64_t tick_ = 0;
-    std::unordered_map<std::string, std::pair<std::uint64_t, std::shared_ptr<const Shape>>> map_;
+    std::unordered_map<std::string, Entry> map_;
 };
 
 /// Number of segments for a full circle of radius r such that the sagitta

@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QDirIterator>
+#include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -135,6 +136,11 @@ AppController::AppController(SessionOptions opt, std::filesystem::path session_d
     loadCommands();
     radial_layout_ = settings_.radial_layout;
     connect(&autosave_timer_, &QTimer::timeout, this, &AppController::autosave);
+    {
+        auto* mt = new QTimer(this);  // status bar memory readout
+        connect(mt, &QTimer::timeout, this, &AppController::memoryChanged);
+        mt->start(2000);
+    }
     autosave_timer_.start(std::max(5, settings_.autosave_seconds) * 1000);
     detectHardware();
     refreshModels();
@@ -753,6 +759,19 @@ void AppController::jumpToHistory(int position) {
 }
 
 // ------------------------------------------------------------------ properties
+double AppController::processMemory() const {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS pmc{};
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc)) return double(pmc.WorkingSetSize);
+    return 0;
+#else
+    QFile f("/proc/self/statm");  // pages: size resident ...
+    if (!f.open(QIODevice::ReadOnly)) return 0;
+    const auto parts = QString::fromLatin1(f.readAll()).split(' ');
+    return parts.size() > 1 ? parts[1].toDouble() * 4096.0 : 0;
+#endif
+}
+
 QString AppController::formatLength(double mm) const { return QString::fromStdString(format_length(mm, unit_)); }
 
 QString AppController::formatPoint(const QVector3D& p) const {

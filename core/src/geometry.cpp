@@ -644,19 +644,35 @@ std::string to_python(const NodePtr& n) {
 }
 
 // ---------------------------------------------------------------- cache
+std::size_t shape_bytes(const Shape& s) {
+    auto mesh_bytes = [](const Mesh* m) { return m ? m->V.capacity() * sizeof(Vec3) + m->F.capacity() * sizeof(Tri) : 0; };
+    std::size_t b = sizeof(Shape) + mesh_bytes(s.mesh.get()) + mesh_bytes(s.lines.get());
+    if (s.grid) b += s.grid->brick_count() * (sizeof(sdf::Brick) + 48) + s.grid->interior_count() * 32;  // + hash node
+    for (const auto& c : s.chunks)
+        if (c) b += mesh_bytes(&c->mesh) + c->cell.capacity() * 8 + c->normal.capacity() * sizeof(c->normal[0]);
+    // Manifold keeps ~3 half-edges (16 B), a normal and properties per triangle
+    if (s.solid) b += std::size_t(s.solid->NumTri()) * 96 + std::size_t(s.solid->NumVert()) * 48;
+    return b;
+}
+
 std::shared_ptr<const Shape> ShapeCache::get(const std::string& key) {
     std::lock_guard lk(mu_);
     auto it = map_.find(key);
     if (it == map_.end()) return nullptr;
-    it->second.first = ++tick_;
-    return it->second.second;
+    it->second.tick = ++tick_;
+    return it->second.shape;
 }
 void ShapeCache::put(const std::string& key, std::shared_ptr<const Shape> s) {
+    const std::size_t sb = s ? shape_bytes(*s) : 0;
     std::lock_guard lk(mu_);
-    map_[key] = {++tick_, std::move(s)};
-    while (map_.size() > max_) {
+    if (auto it = map_.find(key); it != map_.end()) bytes_ -= it->second.bytes;
+    map_[key] = {++tick_, std::move(s), sb};
+    bytes_ += sb;
+    // evict the least recently used until both limits hold (the newest entry stays)
+    while (map_.size() > 1 && (map_.size() > max_ || bytes_ > budget_)) {
         auto oldest = std::min_element(map_.begin(), map_.end(),
-                                       [](const auto& a, const auto& b) { return a.second.first < b.second.first; });
+                                       [](const auto& a, const auto& b) { return a.second.tick < b.second.tick; });
+        bytes_ -= oldest->second.bytes;
         map_.erase(oldest);
     }
 }
@@ -664,9 +680,14 @@ std::size_t ShapeCache::size() const {
     std::lock_guard lk(mu_);
     return map_.size();
 }
+std::size_t ShapeCache::bytes() const {
+    std::lock_guard lk(mu_);
+    return bytes_;
+}
 void ShapeCache::clear() {
     std::lock_guard lk(mu_);
     map_.clear();
+    bytes_ = 0;
 }
 
 // ---------------------------------------------------------------- evaluation
@@ -714,6 +735,11 @@ struct SculptGridCache {
     std::uint64_t tick = 0;
     std::unordered_map<std::string, std::pair<std::uint64_t, std::shared_ptr<const sdf::Grid>>> map;
     static constexpr std::size_t kMax = 96;
+    // Bricks are shared between the stroke states, so the sum below over-counts;
+    // it still bounds the worst case (unrelated large clay objects).
+    static constexpr std::size_t kBudgetBytes = std::size_t(512) << 20;  // 512 MiB
+    std::size_t bytes = 0;
+    std::unordered_map<std::string, std::size_t> sizes;
     std::shared_ptr<const sdf::Grid> get(const std::string& k) {
         std::lock_guard lk(mu);
         auto it = map.find(k);
@@ -722,11 +748,17 @@ struct SculptGridCache {
         return it->second.second;
     }
     void put(const std::string& k, std::shared_ptr<const sdf::Grid> g) {
+        const std::size_t gb = g ? g->brick_count() * (sizeof(sdf::Brick) + 48) : 0;
         std::lock_guard lk(mu);
+        if (auto it = sizes.find(k); it != sizes.end()) bytes -= it->second;
         map[k] = {++tick, std::move(g)};
-        if (map.size() > kMax) {
+        sizes[k] = gb;
+        bytes += gb;
+        while (map.size() > 1 && (map.size() > kMax || bytes > kBudgetBytes)) {
             auto oldest = std::min_element(map.begin(), map.end(),
                                            [](const auto& a, const auto& b) { return a.second.first < b.second.first; });
+            bytes -= sizes[oldest->first];
+            sizes.erase(oldest->first);
             map.erase(oldest);
         }
     }
@@ -735,6 +767,17 @@ SculptGridCache& sculpt_grid_cache() {
     static SculptGridCache c;
     return c;
 }
+}  // namespace
+
+void clear_sculpt_cache() {
+    auto& c = sculpt_grid_cache();
+    std::lock_guard lk(c.mu);
+    c.map.clear();
+    c.sizes.clear();
+    c.bytes = 0;
+}
+
+namespace {
 
 struct Evaluator {
     const VariableResolver& vars;

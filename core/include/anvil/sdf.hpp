@@ -139,6 +139,9 @@ std::size_t clean_for_print(Grid& g);
 /// Clamps both ends of every sign-changing lattice edge to |f| <= h (the zero
 /// set lies between them), so that contouring never skips a real crossing.
 std::size_t clamp_crossings(Grid& g);
+/// Chunk mesh cache: entries and approximate bytes.
+std::pair<std::size_t, std::size_t> chunk_cache_stats();
+void clear_chunk_cache();
 
 /// Dual contouring (Ju et al. 2002 topology: one quad per sign-changing
 /// lattice edge) of the cells owned by one chunk (chunk coordinates in units
@@ -155,7 +158,7 @@ struct ChunkMesh {
     IVec3 chunk;
     Mesh mesh;
     std::vector<std::uint64_t> cell;  // packed cell coordinate per vertex
-    std::vector<Vec3> normal;         // unit normal per vertex: trilinear SDF gradient (seamless across chunks)
+    std::vector<std::array<float, 3>> normal;  // unit normal per vertex: trilinear SDF gradient (seamless across chunks); float: display only
 };
 /// Cached by chunk key (process-wide LRU): unchanged chunks are not re-meshed.
 std::shared_ptr<const ChunkMesh> chunk_mesh(const Grid& g, const IVec3& chunk);
