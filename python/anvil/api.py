@@ -22,7 +22,7 @@ from .sketch import Sketch
 from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 
 __all__ = [
-    "figure", "mini_base",
+    "figure", "mini_base", "pose", "on_base", "unique_name",
     "tube", "prism", "pyramid", "capsule", "rounded_box", "wedge", "ellipsoid", "star",
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
@@ -317,6 +317,46 @@ def mini_base(d=25 * mm, h=3.5 * mm, texture: str = "flagstone", seed: int = 1) 
         raise ValueError("mini_base(): texture must be 'flagstone', 'rubble' or 'plain'")
     kw = _params("mini_base", {"d": d, "h": h, "seed": seed})
     return Solid(_a.make_feature("mini_base", [], kw, {"texture": texture}))
+
+
+# Pose presets (degrees): starting points that stay editable parameter by parameter.
+_POSES = {
+    "stand": {},
+    "walk": {"l_hip_fwd": 22, "r_hip_fwd": -18, "r_knee": 25, "l_shoulder_fwd": -20, "r_shoulder_fwd": 25,
+             "l_elbow": 15, "r_elbow": 25, "spine": 4},
+    "attack": {"spine": 14, "r_shoulder_raise": 25, "r_shoulder_fwd": 110, "r_elbow": 40, "l_shoulder_fwd": 45,
+               "l_elbow": 70, "l_hip_fwd": 28, "r_hip_fwd": -22, "l_knee": 25, "r_knee": 15, "head_tilt": -10,
+               "tail_curl": 50, "wing_spread": 35},
+    "cast": {"l_shoulder_raise": 70, "l_elbow": 30, "r_shoulder_fwd": 60, "r_elbow": 80, "head_tilt": -12,
+             "spine": -5, "wing_spread": 50, "tail_curl": 30},
+    "guard": {"spine": 8, "l_shoulder_fwd": 55, "l_elbow": 95, "r_shoulder_fwd": 30, "r_elbow": 60,
+              "l_hip_fwd": 15, "r_hip_fwd": -15, "l_knee": 20, "r_knee": 20},
+}
+
+
+def pose(obj, preset: str = "stand") -> Obj:
+    """Sets a figure's pose angles from a preset: stand, walk, attack, cast, guard
+    (one undo step; every angle stays editable afterwards)."""
+    if preset not in _POSES:
+        raise ValueError(f"pose(): preset must be one of {', '.join(_POSES)}")
+    name = _name(obj)
+    node = _a.get(name)
+    if node.kind != "Figure":
+        raise ValueError(f"pose(): '{name}' is not a figure (pose before making it sculptable)")
+    angles = {k: 0.0 for k in _PARAM_DIMS["figure"] if _PARAM_DIMS["figure"][k] == ANGLE}
+    angles.update({k: float(v) for k, v in _POSES[preset].items()})
+    edit(name, **{k: v * deg for k, v in angles.items()})
+    return Obj(name)
+
+
+def unique_name(prefix: str) -> str:
+    """A free object name: prefix1, prefix2, ..."""
+    return _a.unique_name(prefix)
+
+
+def on_base(fig, base) -> Obj:
+    """Stands a figure on a base: one clay object (smooth join where they touch)."""
+    return union(fig, base)
 
 
 def transform(s, tx=None, ty=None, tz=None, rx=None, ry=None, rz=None) -> Solid:
@@ -681,7 +721,8 @@ def display(mode: str = "shaded"):
 
 # --------------------------------------------------------------------------- sculpting (M3)
 
-_BRUSHES = ("draw", "carve", "inflate", "clay", "crease", "pinch", "smooth", "grab", "flatten")
+_BRUSHES = ("draw", "carve", "inflate", "clay", "crease", "pinch", "smooth", "grab", "flatten", "texture")
+_PATTERNS = ("scales", "chainmail", "rivets", "stone")
 
 
 def _voxel_for(name: str, voxel) -> float:
@@ -748,7 +789,8 @@ def resculpt(obj, voxel) -> Obj:
 
 
 def sculpt(obj, brush: str = "draw", path=(), radius=2 * mm, strength: float = 0.5, invert: bool = False,
-           symmetry: str = None, sym_at=None, falloff: float = 1.0) -> Obj:
+           symmetry: str = None, sym_at=None, falloff: float = 1.0, pattern: str = "scales",
+           pattern_size=0.6 * mm) -> Obj:
     """One sculpt stroke (one undo step) along `path` (points in mm on the surface).
     brush: draw | carve | inflate | clay | crease | pinch | smooth | grab | flatten.
     invert: opposite direction; symmetry: mirror across the plane x|y|z = sym_at
@@ -777,6 +819,11 @@ def sculpt(obj, brush: str = "draw", path=(), radius=2 * mm, strength: float = 0
         opt["sym_at"] = float(sym_at.value if isinstance(sym_at, Quantity) else sym_at)
     if falloff != 1.0:
         opt["falloff"] = float(falloff)
+    if brush == "texture":
+        if pattern not in _PATTERNS:
+            raise ValueError(f"sculpt(): pattern must be one of {', '.join(_PATTERNS)}")
+        opt["pattern"] = pattern
+        opt["pattern_size"] = _coord_mm(pattern_size, "pattern_size")
     strokes = list(strokes) + [(brush, _coord_mm(radius, "radius"), float(strength),
                                 [tuple(float(c) for c in p) for p in path], opt)]
     _a.set_root(name, _a.make_sculpt(node.child("src"), voxel, strokes))

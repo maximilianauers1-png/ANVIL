@@ -86,6 +86,12 @@ ApplicationWindow {
                 }
                 SnapOverlay { anchors.fill: parent; view: viewport }
                 DrawOverlay { id: drawOverlay; anchors.fill: parent; view: viewport }
+                MiniPanel {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.margins: Theme.unit * 2
+                    visible: App.mode === "Mini"
+                }
                 SculptPanel {
                     anchors.left: parent.left
                     anchors.top: parent.top

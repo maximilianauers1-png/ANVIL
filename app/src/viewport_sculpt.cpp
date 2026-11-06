@@ -92,6 +92,8 @@ bool ViewportItem::sculptPress(QMouseEvent* e) {
     if (mods & Qt::ShiftModifier) brush = sdf::Brush::Smooth;  // sculpting convention
     opt.invert = sculpt_invert_ != bool(mods & Qt::ControlModifier);
     opt.falloff = sculpt_falloff_;
+    sdf::parse_pattern(sculpt_pattern_.toStdString(), opt.pattern);
+    opt.pattern_size = sculpt_pattern_size_;
     if (sculpt_symmetry_ == "x" || sculpt_symmetry_ == "y" || sculpt_symmetry_ == "z") {
         opt.symmetry = sculpt_symmetry_ == "x" ? 0 : sculpt_symmetry_ == "y" ? 1 : 2;
         // mirror plane through the centre of the clay (fixed for the stroke, stored in the command)

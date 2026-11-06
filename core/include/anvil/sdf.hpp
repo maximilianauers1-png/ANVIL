@@ -158,7 +158,11 @@ inline IVec3 chunk_of_brick(const IVec3& b) {
 std::optional<double> raycast(const Grid& g, const Vec3& origin, const Vec3& dir, double t_max);
 
 // --- sculpting ------------------------------------------------------------
-enum class Brush { Draw, Carve, Smooth, Grab, Flatten, Inflate, Clay, Crease, Pinch };
+enum class Brush { Draw, Carve, Smooth, Grab, Flatten, Inflate, Clay, Crease, Pinch, Texture };
+/// Texture brush patterns (procedural, own assets only).
+enum class Pattern { Scales, Chainmail, Rivets, Stone };
+const char* pattern_name(Pattern p);
+bool parse_pattern(const std::string& s, Pattern& out);
 const char* brush_name(Brush b);
 bool parse_brush(const std::string& s, Brush& out);
 const std::vector<Brush>& all_brushes();
@@ -169,6 +173,8 @@ struct StrokeOptions {
     int symmetry = -1;        // mirror axis 0/1/2 (x/y/z), -1 = none
     double sym_at = 0.0;      // mirror plane: coordinate on that axis (mm)
     double falloff = 1.0;     // kernel exponent: w^falloff (< 1 soft and wide, > 1 sharp)
+    Pattern pattern = Pattern::Scales;  // texture brush only
+    double pattern_size = 0.6;          // texture brush: cell size (mm)
     bool operator==(const StrokeOptions&) const = default;
 };
 
@@ -186,6 +192,8 @@ struct StrokeOptions {
 ///   smooth      1 + 4 s MBO iterations per dab (indicator diffusion)
 ///   grab        carries the surface along with the pointer
 ///   flatten     blends towards the plane through the first point
+///   texture     relief pattern (scales, chainmail, rivets, stone) of cell size
+///               `pattern_size`, height 0.3 x size x s, displaced along n0
 struct Stroke {
     Brush brush = Brush::Draw;
     std::vector<Vec3> path;

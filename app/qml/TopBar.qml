@@ -30,7 +30,7 @@ Rectangle {
         // Mode bar. Modes become available with their milestone.
         Repeater {
             model: [
-                { name: "Design", ms: "" }, { name: "Sculpt", ms: "" }, { name: "Mini", ms: "M4" },
+                { name: "Design", ms: "" }, { name: "Sculpt", ms: "" }, { name: "Mini", ms: "" },
                 { name: "Lab", ms: "M5" }, { name: "Print", ms: "M5" }, { name: "AI", ms: "M6" }
             ]
             delegate: AButton {

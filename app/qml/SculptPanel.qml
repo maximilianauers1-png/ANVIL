@@ -41,7 +41,8 @@ Rectangle {
                         ["pinch", "Pinch", "Sharpen ridges and edges"],
                         ["smooth", "Smooth", "Relax the surface (also: hold Shift)"],
                         ["grab", "Grab", "Pull the surface with the pointer"],
-                        ["flatten", "Flatten", "Plane off at the first touched point"]]
+                        ["flatten", "Flatten", "Plane off at the first touched point"],
+                        ["texture", "Texture", "Paint scales, chainmail, rivets or stone"]]
                 delegate: AButton {
                     objectName: "brush_" + modelData[0]
                     text: modelData[1]
@@ -86,6 +87,33 @@ Rectangle {
                 onMoved: root.view.sculptFalloff = Math.round(Math.exp(value) * 20) / 20
             }
             ALabel { text: root.view.sculptFalloff < 0.8 ? "soft" : root.view.sculptFalloff > 1.4 ? "sharp" : "medium"; Layout.preferredWidth: 64 }
+        }
+        RowLayout {
+            visible: root.view.sculptBrush === "texture"
+            spacing: 4
+            ALabel { text: "Pattern" }
+            Repeater {
+                model: [["scales", "Scales"], ["chainmail", "Mail"], ["rivets", "Rivets"], ["stone", "Stone"]]
+                delegate: AButton {
+                    objectName: "pattern_" + modelData[0]
+                    text: modelData[1]
+                    checkable: true
+                    checked: root.view.sculptPattern === modelData[0]
+                    onClicked: root.view.sculptPattern = modelData[0]
+                }
+            }
+        }
+        RowLayout {
+            visible: root.view.sculptBrush === "texture"
+            spacing: 6
+            ALabel { text: "Cell" }
+            Slider {
+                Layout.preferredWidth: 170
+                from: Math.log(0.2); to: Math.log(3)
+                value: Math.log(root.view.sculptPatternSize)
+                onMoved: root.view.sculptPatternSize = Math.round(Math.exp(value) * 100) / 100
+            }
+            ALabel { text: App.formatLength(root.view.sculptPatternSize) }
         }
         RowLayout {
             spacing: 4

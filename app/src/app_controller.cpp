@@ -190,6 +190,9 @@ void AppController::attachViewport(ViewportItem* v) {
         if (st.opt.symmetry >= 0)
             extra += QString(", symmetry=\"") + "xyz"[st.opt.symmetry] + "\", sym_at=" + reprDouble(st.opt.sym_at);
         if (st.opt.falloff != 1.0) extra += ", falloff=" + reprDouble(st.opt.falloff);
+        if (st.brush == sdf::Brush::Texture)
+            extra += QString(", pattern=\"") + sdf::pattern_name(st.opt.pattern) + "\", pattern_size=" +
+                     reprDouble(st.opt.pattern_size) + "*mm";
         execute("sculpt(" + pyStr(object) + ", " + pyStr(sdf::brush_name(st.brush)) + ", [" + pts.join(", ") +
                     "], radius=" + reprDouble(st.radius) + "*mm, strength=" + reprDouble(st.strength) + extra + ")",
                 "ui");

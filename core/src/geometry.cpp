@@ -355,6 +355,8 @@ std::string stroke_options_python(const sdf::StrokeOptions& o) {
         if (o.sym_at != 0) kv.push_back("\"sym_at\": " + repr_double(o.sym_at));
     }
     if (o.falloff != d.falloff) kv.push_back("\"falloff\": " + repr_double(o.falloff));
+    if (o.pattern != d.pattern) kv.push_back(std::string("\"pattern\": \"") + sdf::pattern_name(o.pattern) + "\"");
+    if (o.pattern_size != d.pattern_size) kv.push_back("\"pattern_size\": " + repr_double(o.pattern_size));
     if (kv.empty()) return {};
     std::string s = "{";
     for (std::size_t i = 0; i < kv.size(); ++i) s += (i ? ", " : "") + kv[i];
@@ -365,7 +367,8 @@ std::string stroke_options_python(const sdf::StrokeOptions& o) {
 std::string stroke_key(const sdf::Stroke& s) {
     std::ostringstream o;
     o << sdf::brush_name(s.brush) << "|" << repr_double(s.radius) << "|" << repr_double(s.strength) << "|inv="
-      << s.opt.invert << "|sym=" << s.opt.symmetry << "@" << repr_double(s.opt.sym_at) << "|fo=" << repr_double(s.opt.falloff);
+      << s.opt.invert << "|sym=" << s.opt.symmetry << "@" << repr_double(s.opt.sym_at) << "|fo=" << repr_double(s.opt.falloff) << "|pt="
+      << int(s.opt.pattern) << ":" << repr_double(s.opt.pattern_size);
     for (const auto& p : s.path) o << "|" << repr_double(p.x) << "," << repr_double(p.y) << "," << repr_double(p.z);
     return o.str();
 }

@@ -323,7 +323,8 @@ for _b, _label, _help in (("draw", "Draw", "Build up along the surface normal (C
                           ("pinch", "Pinch", "Sharpen ridges"),
                           ("smooth", "Smooth", "Relax the surface (also: hold Shift)"),
                           ("grab", "Grab", "Pull the surface along with the pointer"),
-                          ("flatten", "Flatten", "Plane off towards the first touched point")):
+                          ("flatten", "Flatten", "Plane off towards the first touched point"),
+                          ("texture", "Texture", "Paint scales, chainmail, rivets or stone")):
     registry.add(Command(id=f"sculpt.{_b}", label=_label, category="Sculpt", help=_help, build=lambda ctx: None,
                          ui=f"sculpt_brush:{_b}", keywords="brush sculpt clay"))
 
@@ -332,6 +333,28 @@ for _b, _label, _help in (("draw", "Draw", "Build up along the surface normal (C
          min_selection=1, max_selection=1, keywords="voxel clay convert remesh")
 def _(ctx):
     return f"sculptable({_single(ctx)})"
+
+
+# --- Mini Forge (M4) ------------------------------------------------------------
+for _p, _label in (("human", "Human"), ("demon", "Demon")):
+    registry.add(Command(id=f"mini.{_p}", label=f"New {_label.lower()} figure", category="Mini",
+                         help=f"{_label} figure, 32 mm (pose and proportions in the panel)", keywords="mini figure body",
+                         build=(lambda p: (lambda ctx: f"show(figure({p!r}, height=32*mm), name=unique_name({p.capitalize()!r}))"))(_p)))
+for _d in (25, 32, 40, 50):
+    registry.add(Command(id=f"mini.base{_d}", label=f"Base {_d} mm", category="Mini",
+                         help=f"Round {_d} mm base with flagstones", keywords="mini base plinth",
+                         build=(lambda d: (lambda ctx: f"show(mini_base(d={d}*mm), name=unique_name('Base'))"))(_d)))
+for _p in ("stand", "walk", "attack", "cast", "guard"):
+    registry.add(Command(id=f"mini.pose_{_p}", label=f"Pose: {_p}", category="Mini",
+                         help=f"Set the selected figure's pose to '{_p}' (angles stay editable)", min_selection=1,
+                         max_selection=1, keywords="pose posture",
+                         build=(lambda p: (lambda ctx: f"pose({ctx.selection[0]!r}, {p!r})"))(_p)))
+
+
+@command("mini.on_base", "Stand on base", "Mini", "Join the selected figure and base into one clay object",
+         min_selection=2, max_selection=2, keywords="join union merge base")
+def _(ctx):
+    return f"on_base({ctx.selection[0]!r}, {ctx.selection[1]!r})"
 
 
 # Radial layout: slot index = sector (0 = east, counter-clockwise in 45 degree steps).
@@ -346,7 +369,7 @@ _MORE = {"submenu": "Shapes", "items": ["create.sphere", "create.tube", "create.
 _EDIT = {"submenu": "Edit", "items": ["edit.fillet", "edit.shell", "edit.chamfer", "edit.duplicate", "edit.hide",
                                       "boolean.union", "boolean.intersect", ""]}
 _BRUSHES_MORE = {"submenu": "Brushes", "items": ["sculpt.inflate", "sculpt.crease", "sculpt.pinch", "sculpt.flatten",
-                                                "", "", "", ""]}
+                                                "sculpt.texture", "", "", ""]}
 registry.radial = {
     "Design": {
         # most used first and stable: drawing tools sit on the top half
@@ -356,6 +379,13 @@ registry.radial = {
                       "file.export_stl", _VIEW],
         "sketch": ["sketch.extrude", "sketch.solidify", "sketch.cut", "sketch.revolve", "edit.delete",
                    "sketch.edit", "draw.polyline", _VIEW],
+    },
+    # Mini mode: create figures and bases, pose, join
+    "Mini": {
+        "empty": ["mini.demon", "mini.human", "mini.base32", "mini.base25", "mini.base40", "mini.base50",
+                  "file.export_stl", _VIEW],
+        "selection": ["mini.pose_attack", "mini.pose_walk", "mini.pose_stand", "mini.pose_cast", "mini.on_base",
+                      "sculpt.make", "file.export_stl", _VIEW],
     },
     # Sculpt mode: brushes always in the same places, with or without selection
     "Sculpt": {

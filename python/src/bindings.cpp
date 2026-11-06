@@ -229,6 +229,8 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
                 if (s.opt.invert) opt["invert"] = true;
                 if (s.opt.symmetry >= 0) opt["symmetry"] = std::string(1, "xyz"[s.opt.symmetry]), opt["sym_at"] = s.opt.sym_at;
                 if (s.opt.falloff != 1.0) opt["falloff"] = s.opt.falloff;
+                if (s.brush == sdf::Brush::Texture)
+                    opt["pattern"] = std::string(sdf::pattern_name(s.opt.pattern)), opt["pattern_size"] = s.opt.pattern_size;
                 strokes.append(py::make_tuple(std::string(sdf::brush_name(s.brush)), s.radius, s.strength, path, opt));
             }
             return py::make_tuple(n.node->sculpt->voxel, strokes);
@@ -275,7 +277,7 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
             sdf::Stroke s;
             if (!sdf::parse_brush(t[0].cast<std::string>(), s.brush))
                 throw std::invalid_argument("unknown brush '" + t[0].cast<std::string>() +
-                                            "' (draw, carve, inflate, clay, crease, pinch, smooth, grab, flatten)");
+                                            "' (draw, carve, inflate, clay, crease, pinch, smooth, grab, flatten, texture)");
             s.radius = t[1].cast<double>();
             s.strength = t[2].cast<double>();
             for (const auto& p : t[3].cast<py::list>()) {
@@ -289,11 +291,16 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
                     if (key == "invert") s.opt.invert = v.cast<bool>();
                     else if (key == "falloff") s.opt.falloff = v.cast<double>();
                     else if (key == "sym_at") s.opt.sym_at = v.cast<double>();
+                    else if (key == "pattern_size") s.opt.pattern_size = v.cast<double>();
+                    else if (key == "pattern") {
+                        if (!sdf::parse_pattern(v.cast<std::string>(), s.opt.pattern))
+                            throw std::invalid_argument("pattern must be scales, chainmail, rivets or stone");
+                    }
                     else if (key == "symmetry") {
                         const std::string ax = v.is_none() ? "" : v.cast<std::string>();
                         s.opt.symmetry = ax == "x" ? 0 : ax == "y" ? 1 : ax == "z" ? 2 : ax.empty() ? -1
                                          : throw std::invalid_argument("symmetry must be 'x', 'y', 'z' or None");
-                    } else throw std::invalid_argument("unknown stroke option '" + key + "' (invert, symmetry, sym_at, falloff)");
+                    } else throw std::invalid_argument("unknown stroke option '" + key + "' (invert, symmetry, sym_at, falloff, pattern, pattern_size)");
                 }
                 if (!(s.opt.falloff > 0)) throw std::invalid_argument("falloff must be > 0");
             }

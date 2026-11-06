@@ -263,6 +263,35 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     add("screenshot sculpt", [this] { screenshot("12_sculpt"); });
     add("back to Design", [this] { app_->setMode("Design"); }, [this] { return !view_->sculptMode(); });
 
+    // 16) Mini Forge: demon -> pose -> base -> stand on base (all via the Mini panel)
+    add("Mini mode, new demon", [this] {
+        app_->setMode("Mini");
+        app_->setSelection({});
+        clickItem("miniDemon");
+    }, [this] { return idle() && hasObject("Demon1"); }, 30000);
+    add("pose: attack", [this] {
+        app_->setSelection({"Demon1"});
+        clickItem("pose_attack");
+    }, [this] {
+        auto h = app_->history();
+        if (!idle() || h.isEmpty()) return false;
+        const QString src = h.back().toMap()["source"].toString();
+        return src.startsWith("pose(") && src.contains("attack");
+    }, 30000);
+    add("base 32 mm", [this] { clickItem("base32"); }, [this] { return idle() && hasObject("Base1"); }, 30000);
+    add("stand on base", [this] { clickItem("miniOnBase"); },
+        [this] { return idle() && hasObject("Demon1") && !hasObject("Base1"); }, 60000);
+    add("demon on base is clay", [this] {}, [this] { return view_->sculptObjects().contains("Demon1"); }, 60000);
+    add("frame mini", [this] {
+        app_->setSelection({"Demon1"});
+        for (const auto& o : app_->objects())
+            if (o.toMap()["name"] != "Demon1") app_->toggleVisible(o.toMap()["name"].toString());
+        app_->requestView("iso");
+        view_->frameAll();
+    }, [this] { return idle(); });
+    add("screenshot mini", [this] { screenshot("13_mini"); });
+    add("back to Design (mini)", [this] { app_->setMode("Design"); }, [this] { return true; });
+
     // 14) Studio scenery: sunset, fjord, night (procedural environment pass)
     for (const char* sc : {"sunset", "fjord", "night"}) {
         const QString name = sc;

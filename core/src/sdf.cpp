@@ -529,6 +529,7 @@ Mesh dual_contour(const Grid& g) {
     std::unordered_map<IVec3, std::uint32_t, CellKeyHash> vmap;
     vmap.reserve(g.brick_count() * 128);
     contour(g, [](const IVec3&) { return true; }, vmap, out);
+    split_nonmanifold(out);  // sheets touching inside one cell
     return out;
 }
 
@@ -586,12 +587,27 @@ const char* brush_name(Brush b) {
         case Brush::Clay: return "clay";
         case Brush::Crease: return "crease";
         case Brush::Pinch: return "pinch";
+        case Brush::Texture: return "texture";
     }
     return "draw";
 }
+const char* pattern_name(Pattern p) {
+    switch (p) {
+        case Pattern::Scales: return "scales";
+        case Pattern::Chainmail: return "chainmail";
+        case Pattern::Rivets: return "rivets";
+        case Pattern::Stone: return "stone";
+    }
+    return "scales";
+}
+bool parse_pattern(const std::string& s, Pattern& out) {
+    for (Pattern p : {Pattern::Scales, Pattern::Chainmail, Pattern::Rivets, Pattern::Stone})
+        if (s == pattern_name(p)) return out = p, true;
+    return false;
+}
 const std::vector<Brush>& all_brushes() {
     static const std::vector<Brush> v{Brush::Draw,    Brush::Carve, Brush::Inflate, Brush::Clay, Brush::Crease,
-                                      Brush::Pinch,   Brush::Smooth, Brush::Grab,   Brush::Flatten};
+                                      Brush::Pinch,   Brush::Smooth, Brush::Grab,   Brush::Flatten, Brush::Texture};
     return v;
 }
 bool parse_brush(const std::string& s, Brush& out) {
@@ -752,6 +768,69 @@ void reinit(Block& B, IVec3 lo, IVec3 hi) {
 }
 }  // namespace
 
+namespace {
+inline double phash(int i, int j, int salt) {
+    std::uint32_t x = std::uint32_t(i) * 73856093u ^ std::uint32_t(j) * 19349663u ^ std::uint32_t(salt) * 83492791u;
+    x ^= x >> 16, x *= 0x7feb352du, x ^= x >> 15, x *= 0x846ca68bu, x ^= x >> 16;
+    return (x & 0xffffff) / double(0x1000000);
+}
+// Relief height in [0, 1] at tangent-plane coordinates (u, v), cell size s.
+double pattern_height(Pattern pt, double u, double v, double s) {
+    const double x = u / s, y = v / s;
+    switch (pt) {
+        case Pattern::Rivets: {  // hemispherical heads on a square grid
+            const double dx = x - std::round(x), dy = y - std::round(y);
+            const double r = std::hypot(dx, dy) / 0.28;
+            return r < 1 ? std::sqrt(1 - r * r) : 0.0;
+        }
+        case Pattern::Scales: {  // overlapping rows (offset by half a cell), each scale a rounded tongue
+            double best = 0;
+            const int j0 = int(std::floor(y));
+            for (int j = j0 - 1; j <= j0 + 1; ++j) {
+                const double off = (j & 1) ? 0.5 : 0.0;
+                const int i0 = int(std::floor(x - off));
+                for (int i = i0 - 1; i <= i0 + 1; ++i) {
+                    const double cx = i + off + 0.5, cy = j + 0.5;
+                    const double r = std::hypot((x - cx) / 0.62, (y - cy - 0.15) / 0.75);
+                    if (r < 1) best = std::max(best, (1 - r) * (0.55 + 0.45 * (cy - y + 0.5)));  // thicker at the free edge
+                }
+            }
+            return std::clamp(best * 1.6, 0.0, 1.0);
+        }
+        case Pattern::Chainmail: {  // rings on an offset lattice
+            double best = 0;
+            const int j0 = int(std::floor(y * 2));
+            for (int j = j0 - 1; j <= j0 + 1; ++j) {
+                const double off = (j & 1) ? 0.5 : 0.0;
+                const int i0 = int(std::floor(x - off));
+                for (int i = i0 - 1; i <= i0 + 1; ++i) {
+                    const double cx = i + off + 0.5, cy = 0.5 * j + 0.25;
+                    const double ring = std::abs(std::hypot(x - cx, y - cy) - 0.36) / 0.11;
+                    if (ring < 1) best = std::max(best, std::sqrt(1 - ring * ring));
+                }
+            }
+            return best;
+        }
+        case Pattern::Stone: {  // Voronoi stones with joints
+            const int ci = int(std::floor(x)), cj = int(std::floor(y));
+            double d1 = 1e9, d2 = 1e9;
+            int bi = 0, bj = 0;
+            for (int j = cj - 1; j <= cj + 1; ++j)
+                for (int i = ci - 1; i <= ci + 1; ++i) {
+                    const double px = i + 0.15 + 0.7 * phash(i, j, 1), py = j + 0.15 + 0.7 * phash(i, j, 2);
+                    const double d = std::hypot(x - px, y - py);
+                    if (d < d1) d2 = d1, d1 = d, bi = i, bj = j;
+                    else if (d < d2) d2 = d;
+                }
+            const double edge = 0.5 * (d2 - d1);
+            const double t = std::clamp(edge / 0.12, 0.0, 1.0);
+            return t * t * (3 - 2 * t) * (0.7 + 0.3 * phash(bi, bj, 3));
+        }
+    }
+    return 0;
+}
+}  // namespace
+
 StrokeApplier::StrokeApplier(Grid& g, Brush brush, double radius, double strength, StrokeOptions opt)
     : g_(g), brush_(brush), R_(radius), st_(std::clamp(strength, 0.0, 1.0)), spacing_(radius / 4), opt_(opt) {
     if (!(radius > 0)) throw std::invalid_argument("sculpt radius must be > 0");
@@ -831,7 +910,11 @@ void StrokeApplier::dab_one(const Vec3& cc, const Vec3& grab, const Vec3& pn, do
     const double sign = opt_.invert ? -1.0 : 1.0;
     // displacement height per dab (see Stroke): a = 0.2 R s
     const double a = 0.2 * R * st;
-    const double disp = (brush_ == Brush::Grab) ? norm(grab) : (brush_ == Brush::Smooth || brush_ == Brush::Flatten) ? 0.0 : a;
+    const double tex_amp = 0.3 * opt_.pattern_size * st;  // texture relief height (mm)
+    const double disp = (brush_ == Brush::Grab)                                   ? norm(grab)
+                        : (brush_ == Brush::Smooth || brush_ == Brush::Flatten)   ? 0.0
+                        : brush_ == Brush::Texture                                ? tex_amp
+                                                                                  : a;
     const double reach = R + (kBand + 1) * h + disp;
     Block B = load_block(g_, cc - Vec3{reach, reach, reach}, cc + Vec3{reach, reach, reach});
     const Block before = B;
@@ -921,6 +1004,16 @@ void StrokeApplier::dab_one(const Vec3& cc, const Vec3& grab, const Vec3& pn, do
                         }
                         case Brush::Grab: {  // semi-Lagrangian: f(x) <- f(x - w delta)
                             f = sample_shift(grab * (w / sub));
+                            break;
+                        }
+                        case Brush::Texture: {
+                            // pattern in the plane across the dominant axis of n0 (world-fixed,
+                            // so neighbouring dabs continue the same pattern seamlessly)
+                            const int ax = std::abs(n0.x) > std::abs(n0.y) ? (std::abs(n0.x) > std::abs(n0.z) ? 0 : 2)
+                                                                            : (std::abs(n0.y) > std::abs(n0.z) ? 1 : 2);
+                            const double u = ax == 0 ? p.y : p.x, v = ax == 2 ? p.y : p.z;
+                            const double ph = pattern_height(opt_.pattern, u, v, opt_.pattern_size);
+                            f = sample_shift(n0 * (sign * tex_amp * w * ph));
                             break;
                         }
                         case Brush::Flatten: {

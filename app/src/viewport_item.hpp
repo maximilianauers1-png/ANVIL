@@ -38,6 +38,8 @@ class ViewportItem : public QQuickItem {
     Q_PROPERTY(bool sculptInvert MEMBER sculpt_invert_ NOTIFY sculptChanged)
     Q_PROPERTY(QString sculptSymmetry MEMBER sculpt_symmetry_ NOTIFY sculptChanged)
     Q_PROPERTY(double sculptFalloff MEMBER sculpt_falloff_ NOTIFY sculptChanged)
+    Q_PROPERTY(QString sculptPattern MEMBER sculpt_pattern_ NOTIFY sculptChanged)
+    Q_PROPERTY(double sculptPatternSize MEMBER sculpt_pattern_size_ NOTIFY sculptChanged)
     Q_PROPERTY(QStringList sculptObjects READ sculptObjects NOTIFY sculptObjectsChanged)
     Q_PROPERTY(QPointF brushPos READ brushPos NOTIFY brushChanged)
     Q_PROPERTY(double brushScreenRadius READ brushScreenRadius NOTIFY brushChanged)
@@ -289,6 +291,8 @@ class ViewportItem : public QQuickItem {
     QString sculpt_brush_ = "draw";
     double sculpt_radius_ = 2.0, sculpt_strength_ = 0.7, sculpt_falloff_ = 1.0;
     bool sculpt_invert_ = false;
+    QString sculpt_pattern_ = "scales";
+    double sculpt_pattern_size_ = 0.6;
     QString sculpt_symmetry_;
     QStringList sculpt_objects_;          // objects whose clay is evaluated (strokes possible)
     sdf::Brush stroke_brush_ = sdf::Brush::Draw;
