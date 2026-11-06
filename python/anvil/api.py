@@ -24,7 +24,7 @@ from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 __all__ = [
     "figure", "mini_base", "pose", "on_base", "unique_name",
     "import_model", "model_file", "model_info", "pose_distortion", "model_options", "weapon", "attach", "equip", "merge", "WEAPONS",
-    "cut", "knife", "lasso_cut", "drill", "slice_cut", "free_memory", "magnet_hole", "rotate",
+    "cut", "knife", "lasso_cut", "drill", "slice_cut", "import_plain", "fit_height", "free_memory", "magnet_hole", "rotate",
     "tube", "prism", "pyramid", "capsule", "rounded_box", "wedge", "ellipsoid", "star",
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
@@ -916,9 +916,48 @@ def export_stl(s, path: str, unit=mm, chord=None, ascii: bool = False) -> dict:
     return rep
 
 
-def import_mesh(path: str, unit=mm, sha256: str = "") -> Solid:
+def import_mesh(path: str, unit=mm, sha256: str = "", scale=None) -> Solid:
+    """A mesh file (STL, OBJ, GLB/glTF) exactly as stored: no rig, no posing,
+    no repair. scale: uniform factor about the origin."""
     node, _, _, _ = _a.import_mesh(_os.path.abspath(_os.fspath(path)), _unit_symbol(unit), sha256)
+    if scale is not None and float(scale) != 1.0:
+        node = _a.with_params(node, "", {"scale": (float(scale), "")})
     return Solid(node)
+
+
+def import_plain(path: str, name: str = None, height=None, unit=mm) -> Obj:
+    """Imports STL, OBJ or GLB/glTF as it is: no rig, no automatic pose, no
+    mesh distortion, position and size as in the file (glTF metres -> mm).
+    height: optionally scale uniformly so that the model is this tall (e.g.
+    32*mm for a Tripo mini)."""
+    p = _os.path.abspath(_os.fspath(path))
+    node, sha, raw, dropped = _a.import_mesh(p, _unit_symbol(unit), "")
+    if dropped:
+        print(f"note: {dropped} zero-area triangles were dropped while welding vertices")
+    base = _os.path.splitext(_os.path.basename(p))[0]
+    base = "".join(c if c.isalnum() or c in "_-" else "_" for c in base) or "Mesh"
+    if not base[0].isalpha():
+        base = "M_" + base
+    o = show(Solid(node), name=name or (_a.unique_name(base) if _exists(base) else base))
+    if height is not None:
+        fit_height(o, height)
+    return o
+
+
+def fit_height(obj, height) -> Obj:
+    """Scales an imported mesh uniformly (about the origin) so that it is
+    `height` tall; the shape itself is unchanged."""
+    name = _name(obj)
+    node = _a.get(name)
+    if node.kind != "Mesh":
+        raise ValueError(f"fit_height(): '{name}' is not an imported mesh (for minis with a rig use height=)")
+    lo, hi = info(name)["bbox"]
+    cur = node.params()["scale"][0]
+    h = float(_param("height", height, LENGTH)[0])
+    if hi[2] - lo[2] <= 0:
+        raise ValueError(f"fit_height(): '{name}' has no height")
+    edit(name, scale=round(cur * h / (hi[2] - lo[2]), 12))
+    return Obj(name)
 
 
 def import_stl(path: str, name: str = None, unit=mm) -> Obj:

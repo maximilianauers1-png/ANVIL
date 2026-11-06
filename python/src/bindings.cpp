@@ -352,6 +352,23 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         if (!sha.empty() && sha != h)
             throw std::runtime_error("'" + path + "' changed since it was imported (sha256 " + h.substr(0, 12) +
                                      "... != " + sha.substr(0, 12) + "...)");
+        std::string ext = p.extension().string();
+        for (auto& c : ext) c = char(std::tolower(static_cast<unsigned char>(c)));
+        if (ext != ".stl") {
+            // OBJ / glTF / GLB as they are: no rig, no posing; a skinned GLB in its stored pose
+            // (glTF metres -> mm, Y up -> Z up; OBJ Y up -> Z up, values as mm)
+            ModelData md;
+            if (ext == ".glb") md = decode_glb(bytes, p.parent_path());
+            else if (ext == ".gltf") md = decode_gltf_json(bytes, {}, p.parent_path());
+            else if (ext == ".obj") md = decode_obj(bytes);
+            else throw std::runtime_error("unsupported mesh format '" + ext + "' (use .stl, .obj, .glb or .gltf)");
+            const double k = unit_info(unit_from(unit)).mm_per_unit;  // OBJ: file units -> mm
+            if (ext == ".obj" && k != 1.0)
+                for (auto& v : md.mesh.V) v = v * k;
+            const std::size_t tris = md.mesh.F.size();
+            auto mesh = std::make_shared<Mesh>(std::move(md.mesh));
+            return std::make_tuple(NodeHandle{make_imported(mesh, path, h, unit_from(unit))}, h, tris, std::size_t(0));
+        }
         auto r = decode_stl(bytes, unit_from(unit));
         if (r.mesh.F.empty()) throw std::runtime_error("'" + path + "' contains no triangles");
         auto mesh = std::make_shared<Mesh>(std::move(r.mesh));

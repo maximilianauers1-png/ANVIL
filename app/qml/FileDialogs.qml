@@ -5,6 +5,7 @@ import Anvil.Native
 Item {
     function importStl() { importDlg.open() }
     function importModel() { modelDlg.open() }
+    function importPlain() { plainDlg.open() }
     function save() { saveDlg.open() }
     function open() { openDlg.open() }
     function importStep() { stepInDlg.open() }
@@ -30,6 +31,13 @@ Item {
         fileMode: FileDialog.OpenFiles
         nameFilters: ["STL files (*.stl)"]
         onAccepted: App.dropFiles(selectedFiles)
+    }
+    FileDialog {
+        id: plainDlg
+        title: "Import mesh as is (no rig, no posing)"
+        fileMode: FileDialog.OpenFiles
+        nameFilters: ["Meshes (*.stl *.obj *.glb *.gltf)", "STL (*.stl)", "Wavefront OBJ (*.obj)", "glTF (*.glb *.gltf)"]
+        onAccepted: App.importPlain(selectedFiles)
     }
     FileDialog {
         id: modelDlg

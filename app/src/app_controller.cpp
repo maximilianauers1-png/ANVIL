@@ -1252,6 +1252,12 @@ QString AppController::defaultExportPath() const {
     return QDir(dir).filePath(base + ".stl");
 }
 
+void AppController::importPlain(const QList<QUrl>& urls) {
+    QStringList lines;
+    for (const auto& u : urls) lines << "import_plain(" + pyStr(QDir::toNativeSeparators(u.toLocalFile())) + ")";
+    if (!lines.isEmpty()) execute(lines.join("\n"), "ui");
+}
+
 QString AppController::dropFiles(const QList<QUrl>& urls) {
     QStringList notes;
     for (const auto& u : urls) {

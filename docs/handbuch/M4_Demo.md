@@ -15,6 +15,19 @@ Nicht unterstützt: FBX (in Blender/Tripo als GLB exportieren) und
 Draco-komprimierte GLB (Kompression beim Export abschalten). ANVIL nennt
 den Grund jeweils in der Fehlermeldung.
 
+### Ohne Rig: „Import as is“
+
+**Mini → „Import as is (STL / OBJ / GLB, no rig)…“** (auch Befehl *Import mesh as is*, Radial
+*Shapes ▸ More ▸*) lädt die Datei **genau so, wie sie ist**: kein Skelett, keine automatische
+Pose, keine Verformung. Position und Größe wie in der Datei (glTF in Metern → mm, also 1,8 m →
+1800 mm). Mit den Höhen-Knöpfen (28/32/54/75 mm) oder `fit_height("Name", 32*mm)` wird nur
+gleichmäßig skaliert. Zum Drucken mit einem Sockel verschmelzen („Merge … for print“) – das
+schließt Löcher des KI-Netzes.
+
+```python
+held = import_plain("C:/Minis/statue.glb", height=32*mm)
+```
+
 ## 2. Posen
 
 - **Stand, Walk, Attack, Cast, Guard** setzen alle Gelenkwinkel auf einmal.

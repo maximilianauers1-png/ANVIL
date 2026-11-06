@@ -98,7 +98,18 @@ w = info(a)["bbox"][1][0] - info(a)["bbox"][0][0]
 ok(w > 20, "rest='file': pose 0 keeps the T-pose of the file (width %.1f mm)" % w)
 delete("Armour")
 
-print("7. precise errors")
+print("7. import as is: no rig, geometry exactly as in the file")
+pl = import_plain(rigged, name="Plain")
+bb = info(pl)["bbox"]
+ok(__import__("_anvil").get("Plain").kind == "Mesh", "a plain mesh (no rig, no pose parameters)")
+ok(abs(bb[1][2] - 1800) < 0.01 and bb[1][0] - bb[0][0] > 1500, "T-pose and size kept (1.8 m glTF -> 1800 mm)")
+fit_height(pl, 32 * mm)
+bb2 = info(pl)["bbox"]
+ok(abs((bb2[1][2] - bb2[0][2]) - 32) < 1e-6, "fit_height: uniform scale to 32 mm")
+ok(abs((bb2[1][0] - bb2[0][0]) / (bb[1][0] - bb[0][0]) - 32 / (bb[1][2] - bb[0][2])) < 1e-9, "proportions unchanged")
+delete("Plain")
+
+print("8. precise errors")
 try:
     attach(weapon("dagger"), "Base")
     show(attach(weapon("dagger"), "Base"), name="Bad")

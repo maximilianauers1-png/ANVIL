@@ -151,6 +151,8 @@ class AppController : public QObject {
     Q_INVOKABLE void exportStl(const QStringList& names, const QString& path, const QString& unit, double chordMm,
                                bool ascii);
     Q_INVOKABLE QString dropFiles(const QList<QUrl>& urls);
+    /// Mesh files exactly as stored (no rig): one command for all files.
+    Q_INVOKABLE void importPlain(const QList<QUrl>& urls);
     Q_INVOKABLE void saveDocument(const QString& path);
     Q_INVOKABLE void openDocument(const QString& path);
     Q_INVOKABLE QString urlToPath(const QUrl& u) const { return u.toLocalFile(); }

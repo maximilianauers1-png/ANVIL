@@ -332,6 +332,12 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
             clickItem("miniMerge");
         }, [this] { return idle() && hasObject("Mini1") && view_->sculptObjects().contains("Mini1"); }, 180000);
         add("screenshot merged mini", [this] { screenshot("15_mini_merged"); });
+        add("import the same GLB as is (no rig)", [this, glb] { app_->importPlain({QUrl::fromLocalFile(glb)}); }, [this] {
+            if (!idle()) return false;
+            for (const auto& o : app_->objects())
+                if (o.toMap()["name"].toString().startsWith("hero") && o.toMap()["kind"].toString() == "Mesh") return true;
+            return false;
+        }, 30000);
     }
     add("back to Design (mini)", [this] { app_->setMode("Design"); }, [this] { return true; });
 

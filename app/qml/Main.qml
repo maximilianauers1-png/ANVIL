@@ -290,6 +290,7 @@ ApplicationWindow {
             if (tool === "export_dialog") exportDialog.openFor(App.selection)
             else if (tool === "import_dialog") fileDialogs.importStl()
             else if (tool === "model_import_dialog") fileDialogs.importModel()
+            else if (tool === "plain_import_dialog") fileDialogs.importPlain()
             else if (tool === "save_dialog") fileDialogs.save()
             else if (tool === "open_dialog") fileDialogs.open()
             else if (tool === "import_step_dialog") fileDialogs.importStep()

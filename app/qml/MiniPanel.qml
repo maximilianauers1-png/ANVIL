@@ -16,6 +16,7 @@ Rectangle {
     }
     readonly property bool selModel: sel !== "" && kindOf(sel) === "Model"
     readonly property bool selFigure: sel !== "" && (kindOf(sel) === "Figure" || selModel)
+    readonly property bool selMesh: sel !== "" && kindOf(sel) === "Mesh"
     readonly property bool selAttach: sel !== "" && kindOf(sel) === "Attach"
     property string hand: "r"
     function modelAttr(k) { App.objects; return root.sel !== "" ? App.objectAttr(root.sel, k) : "" }
@@ -40,18 +41,26 @@ Rectangle {
         AButton {
             objectName: "miniImport"
             Layout.fillWidth: true
-            text: "Import mini (Tripo, Meshy: GLB / OBJ)…"
+            text: "Import mini to pose (GLB / OBJ, with rig)…"
             onClicked: App.runCommand("mini.import")
         }
+        AButton {
+            objectName: "miniImportPlain"
+            Layout.fillWidth: true
+            text: "Import as is (STL / OBJ / GLB, no rig)…"
+            tip: "Exactly the file's geometry: no rig, no posing, no distortion"
+            onClicked: App.runCommand("file.import_plain")
+        }
         RowLayout {
-            visible: root.selFigure
+            visible: root.selFigure || root.selMesh
             spacing: 4
             ALabel { text: "Height" }
             Repeater {
                 model: [28, 32, 54, 75]
                 delegate: AButton {
                     text: modelData + " mm"
-                    onClicked: App.execute("edit(\"" + root.sel + "\", height=" + modelData + "*mm)", "ui")
+                    onClicked: App.execute(root.selMesh ? "fit_height(\"" + root.sel + "\", " + modelData + "*mm)"
+                                                        : "edit(\"" + root.sel + "\", height=" + modelData + "*mm)", "ui")
                 }
             }
         }

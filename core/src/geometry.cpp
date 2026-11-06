@@ -178,8 +178,11 @@ const std::vector<ParamSpec>& param_specs(NodeKind k) {
         {"yaw", kAngle, 0, false, false, "swing sideways about the forearm axis"},
         {"roll", kAngle, 0, false, false, "rotation about the weapon's own axis"},
         {"slide", kLength, 0, false, false, "shift along the grip (+: the hand moves towards the blade)"}};
+    static const std::vector<ParamSpec> imported{
+        {"scale", kNone, 1, true, false, "uniform scale about the origin (1 = as in the file)"}};
     static const std::vector<ParamSpec> none;
     switch (k) {
+        case NodeKind::ImportedMesh: return imported;
         case NodeKind::Model: return model;
         case NodeKind::Weapon: return weap;
         case NodeKind::Attach: return attach;
@@ -324,6 +327,7 @@ NodePtr make_imported(std::shared_ptr<const Mesh> mesh, std::string path, std::s
     n->source_path = std::move(path);
     n->source_sha256 = std::move(sha);
     n->source_unit = unit;
+    n->params = with_defaults(NodeKind::ImportedMesh, {});
     return n;
 }
 
@@ -563,7 +567,10 @@ std::string to_python(const NodePtr& n) {
         }
         case NodeKind::ImportedMesh:
             o << "import_mesh(" << py_str(n->source_path) << ", unit=" << unit_info(n->source_unit).symbol
-              << ", sha256=" << py_str(n->source_sha256) << ")";
+              << ", sha256=" << py_str(n->source_sha256);
+            if (auto it = n->params.find("scale"); it != n->params.end() && (it->second.value != 1.0 || !it->second.expr.empty()))
+                o << ", scale=" << param_to_python(it->second, dims::kNone);
+            o << ")";
             break;
         case NodeKind::Sketch:
             o << sketch_to_python(*n->sketch);
@@ -1480,16 +1487,24 @@ struct Evaluator {
                 return from_manifold(std::move(m));
             }
             case NodeKind::ImportedMesh: {
+                // exactly the file's geometry; only an optional uniform scale (no rig, no posing)
+                const double k = n->params.count("scale") ? get(n, "scale") : 1.0;
+                std::shared_ptr<const Mesh> mesh = n->mesh;
+                if (k != 1.0) {
+                    auto scaled = std::make_shared<Mesh>(*n->mesh);
+                    for (auto& v : scaled->V) v = v * k;
+                    mesh = scaled;
+                }
                 manifold::MeshGL64 g;
                 g.numProp = 3;
-                for (const auto& p : n->mesh->V) g.vertProperties.insert(g.vertProperties.end(), {p.x, p.y, p.z});
-                for (const auto& t : n->mesh->F) g.triVerts.insert(g.triVerts.end(), {t[0], t[1], t[2]});
+                for (const auto& p : mesh->V) g.vertProperties.insert(g.vertProperties.end(), {p.x, p.y, p.z});
+                for (const auto& t : mesh->F) g.triVerts.insert(g.triVerts.end(), {t[0], t[1], t[2]});
                 Manifold m(g);
                 if (m.Status() == Manifold::Error::NoError && m.NumTri() > 0) return from_manifold(std::move(m));
                 auto s = std::make_shared<Shape>();
-                s->mesh = n->mesh;
-                s->error = "imported mesh is not a closed 2-manifold (Manifold status " +
-                           std::to_string(int(m.Status())) + "); mesh repair arrives in M5";
+                s->mesh = mesh;  // shown as it is; merge / make sculptable / cut give a closed, printable solid
+                s->error = "imported mesh is not a closed 2-manifold (holes or overlapping parts); merge it or make it "
+                           "sculptable to get a printable solid";
                 return s;
             }
         }

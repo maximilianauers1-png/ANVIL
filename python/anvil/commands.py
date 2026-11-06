@@ -201,6 +201,13 @@ def _(ctx):
     return None
 
 
+@command("file.import_plain", "Import mesh as is (STL/OBJ/GLB)…", "File",
+         "Import a mesh exactly as stored: no rig, no posing, no distortion (optional: scale to a height)",
+         ui="plain_import_dialog", keywords="open load mesh stl obj glb gltf static plain tripo meshy")
+def _(ctx):
+    return None
+
+
 @command("file.import_stl", "Import STL…", "File", "Import a mesh file", ui="import_dialog", keywords="open load mesh")
 def _(ctx):
     return None
@@ -389,7 +396,7 @@ def _(ctx):
 _VIEW = {"submenu": "View", "items": ["view.right", "view.iso", "view.top", "view.bottom", "view.left",
                                       "view.ortho", "view.front", "view.frame"]}
 _MORE2 = {"submenu": "More", "items": ["create.pyramid", "create.wedge", "create.ellipsoid", "create.star",
-                                       "file.import_stl", "file.import_step", "", ""]}
+                                       "file.import_plain", "file.import_step", "file.import_stl", ""]}
 _MORE = {"submenu": "Shapes", "items": ["create.sphere", "create.tube", "create.cone", "create.prism",
                                        "create.torus", "create.capsule", "create.rounded_box", _MORE2]}
 _EDIT = {"submenu": "Edit", "items": ["edit.fillet", "edit.shell", "edit.chamfer", "edit.duplicate", "edit.hide",
