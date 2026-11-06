@@ -23,7 +23,7 @@ from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 
 __all__ = [
     "figure", "mini_base", "pose", "on_base", "unique_name",
-    "import_model", "model_file", "model_info", "weapon", "attach", "equip", "merge", "WEAPONS",
+    "import_model", "model_file", "model_info", "pose_distortion", "model_options", "weapon", "attach", "equip", "merge", "WEAPONS",
     "cut", "knife", "lasso_cut", "drill", "slice_cut", "free_memory",
     "tube", "prism", "pyramid", "capsule", "rounded_box", "wedge", "ellipsoid", "star",
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
@@ -356,23 +356,36 @@ def pose(obj, preset: str = "stand") -> Obj:
 
 # --------------------------------------------------------------------------- M4: imported minis
 
-def model_file(path: str, sha256: str = "", height=32 * mm, **pose) -> Solid:
+def model_file(path: str, sha256: str = "", height=32 * mm, weights: str = None, rest: str = None, **pose) -> Solid:
     """An imported mini (GLB / glTF / OBJ / STL) as a posable solid. The file
-    hash is checked when given (saved documents and the journal pass it)."""
+    hash is checked when given (saved documents and the journal pass it).
+    weights 'file' (the rig's own skin weights) or 'auto' (geodesic weights
+    computed by ANVIL for the file's skeleton: use it when posing distorts the
+    mesh); rest 'normalize' (pose 0 = arms hanging, also for T-pose files) or
+    'file' (pose 0 = the pose stored in the file)."""
     p = _os.path.abspath(_os.fspath(path))
     kw = {"height": height}
     kw.update(pose)
-    node, _sha = _a.load_model(p, sha256, _params("model", kw))
+    attrs = {}
+    if weights is not None:
+        if weights not in ("file", "auto"):
+            raise ValueError("model_file(): weights must be 'file' or 'auto'")
+        attrs["weights"] = weights
+    if rest is not None:
+        if rest not in ("normalize", "file"):
+            raise ValueError("model_file(): rest must be 'normalize' or 'file'")
+        attrs["rest"] = rest
+    node, _sha = _a.load_model(p, sha256, _params("model", kw), attrs)
     return Solid(node)
 
 
-def import_model(path: str, height=32 * mm, name: str = None, **pose) -> Obj:
+def import_model(path: str, height=32 * mm, name: str = None, weights: str = None, rest: str = None, **pose) -> Obj:
     """Imports a mini from Tripo, Meshy, Blender, ... (.glb, .gltf, .obj, .stl),
     scaled so that it is `height` tall, standing on z = 0 and facing -Y.
     A rigged GLB (skin) is posed with its own bones; other files get an
     automatic humanoid rig (best for T- or A-pose models). Pose angles as for
     figure(), e.g. r_shoulder_fwd=60*deg; presets via pose(obj, "attack")."""
-    s = model_file(path, height=height, **pose)
+    s = model_file(path, height=height, weights=weights, rest=rest, **pose)
     base = _os.path.splitext(_os.path.basename(_os.fspath(path)))[0]
     base = "".join(c if c.isalnum() or c in "_-" else "_" for c in base) or "Model"
     if not base[0].isalpha():
@@ -382,6 +395,30 @@ def import_model(path: str, height=32 * mm, name: str = None, **pose) -> Obj:
 
 def _exists(name: str) -> bool:
     return any(n == name for n, _ in _a.objects())
+
+
+def pose_distortion(obj) -> dict:
+    """How much the current pose stretches the surface: edge-length ratios
+    (posed / rest, either way round): max, p99 and the fraction over 1.5x."""
+    return _a.pose_distortion(_a.get(_name(obj)))
+
+
+def model_options(obj, weights: str = None, rest: str = None) -> Obj:
+    """Changes how an imported model deforms (one undo step): weights 'file' /
+    'auto', rest 'normalize' / 'file'. Pose angles and height are kept."""
+    name = _name(obj)
+    node = _a.get(name)
+    if node.kind != "Model":
+        raise ValueError(f"model_options(): '{name}' is not an imported model")
+    info_ = node.model_info()
+    params = {k: v for k, v in node.params().items()}
+    attrs = dict(node.attrs()) if hasattr(node, "attrs") else {}
+    if weights is not None:
+        attrs["weights"] = weights
+    if rest is not None:
+        attrs["rest"] = rest
+    new, _ = _a.load_model(info_["path"], info_["sha256"], params, attrs)
+    return show(Solid(new), name=name)
 
 
 def model_info(obj) -> dict:

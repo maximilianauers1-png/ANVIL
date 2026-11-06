@@ -18,6 +18,7 @@ Rectangle {
     readonly property bool selFigure: sel !== "" && (kindOf(sel) === "Figure" || selModel)
     readonly property bool selAttach: sel !== "" && kindOf(sel) === "Attach"
     property string hand: "r"
+    function modelAttr(k) { App.objects; return root.sel !== "" ? App.objectAttr(root.sel, k) : "" }
     readonly property var printable: App.objects.filter(function (o) { return o.visible && o.kind !== "Sketch" }).map(function (o) { return o.name })
     readonly property var figures: App.objects.filter(function (o) { return o.visible && (o.kind === "Model" || o.kind === "Figure" || o.kind === "Sculpt") }).map(function (o) { return o.name })
     readonly property var bases: App.objects.filter(function (o) { return o.kind === "MiniBase" }).map(function (o) { return o.name })
@@ -68,6 +69,40 @@ Rectangle {
                     text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
                     onClicked: App.runCommand("mini.pose_" + modelData)
                 }
+            }
+        }
+        RowLayout {
+            visible: root.selModel
+            spacing: 4
+            ALabel { text: "Rest" }
+            AButton {
+                objectName: "restNormalize"; text: "Arms down"
+                tip: "Pose 0 = arms hanging (T- and A-pose files are lowered)"
+                primary: root.modelAttr("rest") !== "file"
+                onClicked: App.execute("model_options(\"" + root.sel + "\", rest=\"normalize\")", "ui")
+            }
+            AButton {
+                objectName: "restFile"; text: "As in file"
+                tip: "Pose 0 = the pose stored in the file (less deformation for posed statues)"
+                primary: root.modelAttr("rest") === "file"
+                onClicked: App.execute("model_options(\"" + root.sel + "\", rest=\"file\")", "ui")
+            }
+        }
+        RowLayout {
+            visible: root.selModel
+            spacing: 4
+            ALabel { text: "Weights" }
+            AButton {
+                objectName: "weightsFile"; text: "From file"
+                tip: "Skin weights of the file's rig (Tripo, Meshy, Mixamo)"
+                primary: root.modelAttr("weights") !== "auto"
+                onClicked: App.execute("model_options(\"" + root.sel + "\", weights=\"file\")", "ui")
+            }
+            AButton {
+                objectName: "weightsAuto"; text: "ANVIL (geodesic)"
+                tip: "Recompute the weights through the solid: use it when posing stretches or tears the mesh"
+                primary: root.modelAttr("weights") === "auto"
+                onClicked: App.execute("model_options(\"" + root.sel + "\", weights=\"auto\")", "ui")
             }
         }
         ALabel {

@@ -20,6 +20,10 @@ rigged = humanoid_glb(os.path.join(tmp, "hero.glb"), rigged=True)
 plain = humanoid_glb(os.path.join(tmp, "statue.glb"), rigged=False)
 
 
+def get_attrs(name):
+    return dict(__import__("_anvil").get(name).attrs())
+
+
 def ok(cond, msg):
     if not cond:
         raise AssertionError(msg)
@@ -77,7 +81,24 @@ vol = info("Mini")["volume"]
 load(doc)
 ok(abs(info("Mini")["volume"] - vol) < 1e-9, "reload gives the same merged volume")
 
-print("6. precise errors")
+print("6. distortion fixes: rigid armour plates, geodesic weights, file rest pose")
+pd = humanoid_glb(os.path.join(tmp, "pauldrons.glb"), rigged=True, pauldrons=True)
+a = import_model(pd, name="Armour")
+ok(model_info(a)["rigid_parts"] >= 2, "separate shoulder plates bound rigidly (%d rigid shells)" % model_info(a)["rigid_parts"])
+pose(a, "attack")
+d = pose_distortion(a)
+ok(d["p99"] < 3.0, "pose distortion measured: p99 edge ratio %.2f" % d["p99"])
+model_options(a, weights="auto")
+ok(get_attrs("Armour").get("weights") == "auto", "geodesic weights for the file's skeleton")
+model_options(a, rest="file")
+w_file = info(a)["bbox"][1][0] - info(a)["bbox"][0][0]
+pose(a, "stand")
+ok(w_file > 0, "rest='file' evaluates")
+w = info(a)["bbox"][1][0] - info(a)["bbox"][0][0]
+ok(w > 20, "rest='file': pose 0 keeps the T-pose of the file (width %.1f mm)" % w)
+delete("Armour")
+
+print("7. precise errors")
 try:
     attach(weapon("dagger"), "Base")
     show(attach(weapon("dagger"), "Base"), name="Bad")

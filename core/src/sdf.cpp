@@ -643,7 +643,7 @@ std::size_t clean_for_print(Grid& g) {
     return total + clamp_crossings(g);  // signs are final: make every crossing contourable
 }
 
-Grid from_mesh_robust(const Mesh& input, double h, std::size_t* capped) {
+Grid from_mesh_robust(const Mesh& input, double h, std::size_t* capped, bool boundary_distance) {
     // Sign: generalized winding number |w| > 1/2 of the boundary-capped soup
     // (ADR 0018). After capping, w is integer valued off the surface, so it is
     // constant inside any ball that contains no triangle: two lattice
@@ -672,7 +672,8 @@ Grid from_mesh_robust(const Mesh& input, double h, std::size_t* capped) {
     // even where a boundary piece was missed (it then only biases the value).
     Mesh boundary;
     boundary.V = m.V;
-    {
+    if (!boundary_distance) boundary.F = m.F;
+    else {
         std::vector<char> keep(m.F.size(), 0);
         const double eps = 0.25 * h;
         static const double bary[7][3] = {{1 / 3., 1 / 3., 1 / 3.}, {0.8, 0.1, 0.1}, {0.1, 0.8, 0.1}, {0.1, 0.1, 0.8},

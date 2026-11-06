@@ -12,6 +12,9 @@
 #include <atomic>
 
 #include "anvil/model_io.hpp"
+#include "anvil/sdf.hpp"
+#include <queue>
+#include <unordered_map>
 #include "anvil/winding.hpp"
 #include "anvil/tolerance.hpp"
 
@@ -47,6 +50,10 @@ Quat Quat::from_to(const Vec3& a_in, const Vec3& b_in) {
 namespace {
 
 constexpr double kArmOut = 0.17;  // rad: rest arm 10 degrees out from the body (as figure.cpp)
+// Separate shells up to a quarter of the figure's height (bounding-box
+// diagonal) count as rigid parts: pauldrons, plates, a head or a hand; a whole
+// separate arm or leg (~0.45 H) still bends at its joints.
+constexpr double kRigidPartFraction = 0.25;
 const Vec3 kDown{0, 0, -1};
 
 Quat rx(double a) { return Quat::axis_angle({1, 0, 0}, a); }
@@ -312,46 +319,7 @@ Rig auto_rig(const Mesh& m) {
     for (std::size_t j = 0; j < rig.names.size(); ++j)
         if (rig.role[j] == Role::Hand || rig.role[j] == Role::Foot) rig.tip[j] = tips[j];
 
-    // ---- weights. Bone j = segment pivot_j -> tip_j. Influences: bones within
-    // 3 sigma of the nearest one whose straight path to the vertex runs inside
-    // the solid (winding number of the capped mesh at the midpoint), weighted
-    // exp(-(d - d_min) / sigma). sigma = 1.2 % of the height (0.4 mm on a 32 mm
-    // mini): the blend zone around a joint spans ~ +-3 sigma ~ the limb radius.
-    const double sigma = 0.012 * H;
-    Mesh capped = m;
-    cap_boundaries(capped);
-    const WindingNumber wn(capped, tol::kWindingBeta);
-    const std::size_t nb = rig.names.size();
-    rig.joints.assign(m.V.size(), {0, 0, 0, 0});
-    rig.weights.assign(m.V.size(), {0, 0, 0, 0});
-    parallel_for(m.V.size(), [&](std::size_t i) {
-        const Vec3& v = m.V[i];
-        std::vector<std::pair<double, int>> d;
-        std::vector<Vec3> foot(nb);
-        for (std::size_t j = 0; j < nb; ++j) {
-            const Vec3 a = rig.pivot[j], ab = rig.tip[j] - a;
-            const double l2 = dot(ab, ab);
-            const double t = l2 > 0 ? std::clamp(dot(v - a, ab) / l2, 0.0, 1.0) : 0.0;
-            foot[j] = a + ab * t;
-            d.push_back({norm(v - foot[j]), int(j)});
-        }
-        std::sort(d.begin(), d.end());
-        std::vector<std::pair<double, int>> cand, vis;
-        for (const auto& c : d)
-            if (c.first <= d[0].first + 3 * sigma && cand.size() < 4) cand.push_back(c);
-        if (cand.size() == 1) vis = cand;  // a single candidate needs no visibility test
-        else
-            for (const auto& [dj, j] : cand)
-                if (std::abs(wn((v + foot[std::size_t(j)]) * 0.5)) > 0.5) vis.push_back({dj, j});
-        if (vis.empty()) vis.push_back(d[0]);
-        double sum = 0;
-        std::array<double, 4> w{};
-        for (std::size_t k = 0; k < vis.size(); ++k) sum += (w[k] = std::exp(-(vis[k].first - vis[0].first) / sigma));
-        for (std::size_t k = 0; k < vis.size(); ++k) {
-            rig.joints[i][k] = std::uint16_t(vis[k].second);
-            rig.weights[i][k] = float(w[k] / sum);
-        }
-    });
+    geodesic_weights(rig, m);
     return rig;
 }
 
@@ -379,13 +347,13 @@ std::vector<Xf> pose_joints(const Rig& rig, const std::map<std::string, double>&
             case Role::Head: local(rz(ang("head_turn")) * rx(ang("head_tilt"))); break;
             case Role::UpperArm: {
                 // as figure.cpp: abduction about Y (outwards), then flexion about X (forwards)
-                F[j] = Fp * ry(-s * (kArmOut + ang(pre + "shoulder_raise"))) * rx(-ang(pre + "shoulder_fwd"));
-                G[j] = F[j] * Quat::from_to(rig.tip[j] - rig.pivot[j], kDown);
+                F[j] = Fp * ry(-s * ((rig.normalize_arms ? kArmOut : 0.0) + ang(pre + "shoulder_raise"))) * rx(-ang(pre + "shoulder_fwd"));
+                G[j] = rig.normalize_arms ? F[j] * Quat::from_to(rig.tip[j] - rig.pivot[j], kDown) : F[j];
                 break;
             }
             case Role::Forearm: {
                 F[j] = Fp * rx(-ang(pre + "elbow"));
-                G[j] = F[j] * Quat::from_to(rig.tip[j] - rig.pivot[j], kDown);
+                G[j] = rig.normalize_arms ? F[j] * Quat::from_to(rig.tip[j] - rig.pivot[j], kDown) : F[j];
                 break;
             }
             case Role::Thigh: local(rx(-ang(pre + "hip_fwd")) * ry(-s * ang(pre + "hip_side"))); break;
@@ -445,7 +413,7 @@ Xf hand_grip(const Rig& rig, const std::vector<Xf>& X, int side) {
         throw std::runtime_error(std::string("the model has no ") + (side > 0 ? "left" : "right") + " hand in its rig");
     const auto h = std::size_t(hand), f = std::size_t(fore);
     // canonical forearm frame F = G A^-1 (pose_joints: G = F A)
-    const Quat A = Quat::from_to(rig.tip[f] - rig.pivot[f], kDown);
+    const Quat A = rig.normalize_arms ? Quat::from_to(rig.tip[f] - rig.pivot[f], kDown) : Quat{};
     Xf g;
     g.q = X[f].q * A.conj();
     // fist centre: 70 % of the way from the wrist to the knuckles (the
@@ -454,14 +422,244 @@ Xf hand_grip(const Rig& rig, const std::vector<Xf>& X, int side) {
     return g;
 }
 
-std::shared_ptr<const ModelAsset> make_asset(ModelData md, double height0) {
+namespace {
+double seg_dist(const Vec3& p, const Vec3& a, const Vec3& b) {
+    const Vec3 ab = b - a;
+    const double l2 = dot(ab, ab);
+    const double t = l2 > 0 ? std::clamp(dot(p - a, ab) / l2, 0.0, 1.0) : 0.0;
+    return norm(p - (a + ab * t));
+}
+// vertex one-rings (unique neighbours)
+std::vector<std::vector<std::uint32_t>> one_rings(const Mesh& m) {
+    std::vector<std::vector<std::uint32_t>> r(m.V.size());
+    for (const auto& f : m.F)
+        for (int k = 0; k < 3; ++k) r[f[std::size_t(k)]].push_back(f[std::size_t((k + 1) % 3)]), r[f[std::size_t(k)]].push_back(f[std::size_t((k + 2) % 3)]);
+    for (auto& v : r) {
+        std::sort(v.begin(), v.end());
+        v.erase(std::unique(v.begin(), v.end()), v.end());
+    }
+    return r;
+}
+// keep the 4 largest weights, normalised
+void store_top4(Rig& rig, std::size_t i, std::vector<std::pair<double, int>>& c) {
+    std::sort(c.begin(), c.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    if (c.size() > 4) c.resize(4);
+    double sum = 0;
+    for (const auto& x : c) sum += x.first;
+    rig.joints[i] = {0, 0, 0, 0};
+    rig.weights[i] = {0, 0, 0, 0};
+    for (std::size_t k = 0; k < c.size(); ++k) {
+        rig.joints[i][k] = std::uint16_t(c[k].second);
+        rig.weights[i][k] = float(sum > 0 ? c[k].first / sum : (k == 0 ? 1.0 : 0.0));
+    }
+}
+}  // namespace
+
+void geodesic_weights(Rig& rig, const Mesh& m) {
+    const Box3 bb = m.bounds();
+    const double H = std::max({bb.hi.z - bb.lo.z, bb.hi.x - bb.lo.x, bb.hi.y - bb.lo.y});
+    if (!(H > 0) || rig.names.empty()) return;
+    // ~160 voxels over the largest extent: limbs of a 32 mm mini get >= 4 voxels across
+    const double h = sdf::voxel_step(H / 160);
+    const sdf::Grid g = sdf::from_mesh_robust(m, h, nullptr, false);
+    const int i0 = int(std::floor(bb.lo.x / h)) - 2, j0 = int(std::floor(bb.lo.y / h)) - 2, k0 = int(std::floor(bb.lo.z / h)) - 2;
+    const int nx = int(std::ceil(bb.hi.x / h)) + 3 - i0, ny = int(std::ceil(bb.hi.y / h)) + 3 - j0, nz = int(std::ceil(bb.hi.z / h)) + 3 - k0;
+    auto lin = [&](int i, int j, int k) { return (std::size_t(k) * std::size_t(ny) + std::size_t(j)) * std::size_t(nx) + std::size_t(i); };
+    std::vector<std::int32_t> id(std::size_t(nx) * std::size_t(ny) * std::size_t(nz), -1);
+    std::vector<std::array<int, 3>> cell;
+    for (int k = 0; k < nz; ++k)
+        for (int j = 0; j < ny; ++j)
+            for (int i = 0; i < nx; ++i)
+                if (g.at(i0 + i, j0 + j, k0 + k) < 0) id[lin(i, j, k)] = std::int32_t(cell.size()), cell.push_back({i, j, k});
+    if (cell.empty()) return;
+    auto pos = [&](std::size_t c) { return Vec3{(i0 + cell[c][0]) * h, (j0 + cell[c][1]) * h, (k0 + cell[c][2]) * h}; };
+    const std::size_t nb = rig.names.size(), nc = cell.size();
+    const double dmax = 0.5 * H;
+    std::vector<std::vector<float>> geo(nb, std::vector<float>(nc, INFINITY));
+    parallel_for(nb, [&](std::size_t b) {
+        auto& d = geo[b];
+        using QE = std::pair<double, std::int32_t>;
+        std::priority_queue<QE, std::vector<QE>, std::greater<QE>> q;
+        // seeds: inside voxels along the bone (else the inside voxel nearest to it)
+        const Vec3 a = rig.pivot[b], t = rig.tip[b];
+        const int steps = std::max(1, int(norm(t - a) / (0.5 * h)));
+        for (int s = 0; s <= steps; ++s) {
+            const Vec3 p = a + (t - a) * (double(s) / steps);
+            const int i = int(std::lround(p.x / h)) - i0, j = int(std::lround(p.y / h)) - j0, k = int(std::lround(p.z / h)) - k0;
+            if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) continue;
+            const std::int32_t c = id[lin(i, j, k)];
+            if (c < 0) continue;
+            const double d0 = norm(pos(std::size_t(c)) - p);
+            if (d0 < d[std::size_t(c)]) d[std::size_t(c)] = float(d0), q.push({d0, c});
+        }
+        if (q.empty()) {
+            std::size_t best = 0;
+            double bd = INFINITY;
+            for (std::size_t c = 0; c < nc; ++c)
+                if (const double dd = seg_dist(pos(c), a, t); dd < bd) bd = dd, best = c;
+            d[best] = float(bd);
+            q.push({bd, std::int32_t(best)});
+        }
+        while (!q.empty()) {
+            const auto [dc, c] = q.top();
+            q.pop();
+            if (dc > d[std::size_t(c)] || dc > dmax) continue;
+            const auto& cc = cell[std::size_t(c)];
+            for (int dz = -1; dz <= 1; ++dz)
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int n2 = dx * dx + dy * dy + dz * dz;
+                        if (!n2) continue;
+                        const int i = cc[0] + dx, j = cc[1] + dy, k = cc[2] + dz;
+                        if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) continue;
+                        const std::int32_t e = id[lin(i, j, k)];
+                        if (e < 0) continue;
+                        const double nd = dc + h * std::sqrt(double(n2));
+                        if (nd < d[std::size_t(e)]) d[std::size_t(e)] = float(nd), q.push({nd, e});
+                    }
+        }
+    });
+    const double sigma = 0.02 * H;
+    rig.joints.assign(m.V.size(), {0, 0, 0, 0});
+    rig.weights.assign(m.V.size(), {0, 0, 0, 0});
+    parallel_for(m.V.size(), [&](std::size_t vi) {
+        const Vec3& p = m.V[vi];
+        // geodesic distance of the vertex: through the inside voxels around it
+        std::vector<double> dv(nb, INFINITY);
+        const int ci = int(std::lround(p.x / h)) - i0, cj = int(std::lround(p.y / h)) - j0, ck = int(std::lround(p.z / h)) - k0;
+        for (int r = 1; r <= 3; ++r) {
+            bool found = false;
+            for (int dz = -r; dz <= r; ++dz)
+                for (int dy = -r; dy <= r; ++dy)
+                    for (int dx = -r; dx <= r; ++dx) {
+                        const int i = ci + dx, j = cj + dy, k = ck + dz;
+                        if (i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz) continue;
+                        const std::int32_t c = id[lin(i, j, k)];
+                        if (c < 0) continue;
+                        found = true;
+                        const double off = norm(pos(std::size_t(c)) - p);
+                        for (std::size_t b = 0; b < nb; ++b) dv[b] = std::min(dv[b], double(geo[b][std::size_t(c)]) + off);
+                    }
+            if (found) break;
+        }
+        double dmin = *std::min_element(dv.begin(), dv.end());
+        std::vector<std::pair<double, int>> c;
+        if (std::isfinite(dmin)) {
+            for (std::size_t b = 0; b < nb; ++b)
+                if (dv[b] <= dmin + 3 * sigma) c.push_back({std::exp(-(dv[b] - dmin) / sigma), int(b)});
+        } else {  // isolated sliver outside the voxel solid: nearest bone in space
+            double best = INFINITY;
+            int bi = 0;
+            for (std::size_t b = 0; b < nb; ++b)
+                if (const double dd = seg_dist(p, rig.pivot[b], rig.tip[b]); dd < best) best = dd, bi = int(b);
+            c.push_back({1.0, bi});
+        }
+        store_top4(rig, vi, c);
+    });
+    // two smoothing passes over the one-rings (soft joints without seams)
+    const auto ring = one_rings(m);
+    for (int pass = 0; pass < 2; ++pass) {
+        const auto J = rig.joints;
+        const auto W = rig.weights;
+        parallel_for(m.V.size(), [&](std::size_t vi) {
+            std::unordered_map<int, double> acc;
+            for (int k = 0; k < 4; ++k) acc[J[vi][std::size_t(k)]] += 0.5 * W[vi][std::size_t(k)];
+            const double wn = ring[vi].empty() ? 0.0 : 0.5 / double(ring[vi].size());
+            for (auto u : ring[vi])
+                for (int k = 0; k < 4; ++k) acc[J[u][std::size_t(k)]] += wn * W[u][std::size_t(k)];
+            std::vector<std::pair<double, int>> c;
+            for (const auto& [b, w] : acc)
+                if (w > 0) c.push_back({w, b});
+            if (ring[vi].empty())
+                for (auto& x : c) x.first *= 2;
+            store_top4(rig, vi, c);
+        });
+    }
+}
+
+std::size_t rigidify_parts(Rig& rig, const Mesh& m, double max_size) {
+    if (rig.joints.size() != m.V.size() || m.V.empty()) return 0;
+    // connected components over shared vertices (union-find)
+    std::vector<std::uint32_t> uf(m.V.size());
+    std::iota(uf.begin(), uf.end(), 0u);
+    std::function<std::uint32_t(std::uint32_t)> find = [&](std::uint32_t x) {
+        while (uf[x] != x) x = uf[x] = uf[uf[x]];
+        return x;
+    };
+    for (const auto& f : m.F)
+        for (int k = 1; k < 3; ++k) {
+            const auto a = find(f[0]), b = find(f[std::size_t(k)]);
+            if (a != b) uf[std::max(a, b)] = std::min(a, b);
+        }
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> comp;
+    for (std::uint32_t v = 0; v < m.V.size(); ++v) comp[find(v)].push_back(v);
+    if (comp.size() < 2) return 0;  // one connected mesh: nothing to separate
+    std::size_t n = 0;
+    for (const auto& [r, vs] : comp) {  // the body itself is larger than max_size
+        Box3 b;
+        Vec3 c{0, 0, 0};
+        std::vector<char> used(rig.names.size(), 0);
+        for (auto v : vs) {
+            b.add(m.V[v]), c += m.V[v];
+            for (int k = 0; k < 4; ++k)
+                if (rig.weights[v][std::size_t(k)] > 0.05f) used[rig.joints[v][std::size_t(k)]] = 1;
+        }
+        if (b.diagonal() > max_size) continue;
+        c = c / double(vs.size());
+        int best = -1;
+        double bd = INFINITY;
+        for (int pass = 0; pass < 2 && best < 0; ++pass)  // bones carrying weight first, then any
+            for (std::size_t j = 0; j < rig.names.size(); ++j) {
+                if (pass == 0 && !used[j]) continue;
+                if (const double d = seg_dist(c, rig.pivot[j], rig.tip[j]); d < bd) bd = d, best = int(j);
+            }
+        if (best < 0) continue;
+        for (auto v : vs) {
+            rig.joints[v] = {std::uint16_t(best), 0, 0, 0};
+            rig.weights[v] = {1, 0, 0, 0};
+        }
+        ++n;
+    }
+    rig.rigid_parts = n;
+    return n;
+}
+
+Distortion distortion(const Mesh& rest, const Mesh& posed) {
+    Distortion d;
+    if (rest.V.size() != posed.V.size() || rest.F.empty()) return d;
+    std::vector<double> r;
+    r.reserve(rest.F.size() * 3);
+    for (const auto& f : rest.F)
+        for (int k = 0; k < 3; ++k) {
+            const auto a = f[std::size_t(k)], b = f[std::size_t((k + 1) % 3)];
+            if (a > b) continue;  // each interior edge once (both orientations share it)
+            const double l0 = norm(rest.V[b] - rest.V[a]), l1 = norm(posed.V[b] - posed.V[a]);
+            if (l0 <= 0 || l1 <= 0) continue;
+            r.push_back(std::max(l1 / l0, l0 / l1));
+        }
+    if (r.empty()) return d;
+    std::sort(r.begin(), r.end());
+    d.max_ratio = r.back();
+    d.p99_ratio = r[std::min(r.size() - 1, std::size_t(0.99 * double(r.size())))];
+    d.frac_over_1_5 = double(r.end() - std::upper_bound(r.begin(), r.end(), 1.5)) / double(r.size());
+    return d;
+}
+
+std::shared_ptr<const ModelAsset> make_asset(ModelData md, double height0, const AssetOptions& opt) {
     fit_to_height(md, height0);
     auto a = std::make_shared<ModelAsset>();
-    a->rig = md.skin ? from_skin(*md.skin, md.mesh.V.size()) : auto_rig(md.mesh);
-    if (md.skin && (a->rig.find(Role::UpperArm, 1) < 0 || a->rig.find(Role::Thigh, 1) < 0)) {
-        // a skin without recognisable humanoid bones (props, creatures): fit our own
+    const bool humanoid_skin = md.skin && [&] {
+        Rig r = from_skin(*md.skin, md.mesh.V.size());
+        return r.find(Role::UpperArm, 1) >= 0 && r.find(Role::Thigh, 1) >= 0;
+    }();
+    if (humanoid_skin) {
+        a->rig = from_skin(*md.skin, md.mesh.V.size());
+        if (opt.weights == "auto") geodesic_weights(a->rig, md.mesh);  // the file's skeleton, our weights
+    } else {
+        // no skin, or one without recognisable humanoid bones (props, creatures): fit our own
         a->rig = auto_rig(md.mesh);
     }
+    if (opt.rigid) rigidify_parts(a->rig, md.mesh, kRigidPartFraction * height0);
     a->mesh = std::move(md.mesh);
     a->height0 = height0;
     a->format = md.format;

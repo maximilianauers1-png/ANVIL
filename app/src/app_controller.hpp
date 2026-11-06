@@ -155,6 +155,7 @@ class AppController : public QObject {
     /// "12.5" (display unit) or "3 cm" -> mm; NaN when the text is not a plain length.
     Q_INVOKABLE double parseLength(const QString& text) const;
     Q_INVOKABLE QString objectKind(const QString& name) const;
+    Q_INVOKABLE QString objectAttr(const QString& name, const QString& key) const;
     Q_INVOKABLE QVariantMap sketchInfo(const QString& name) const;  // points/curves/dims in world space + solver state
     Q_INVOKABLE void sketchDrag(const QString& sketch, const QString& point, double x, double y);
     Q_INVOKABLE void sketchSetDim(const QString& sketch, const QString& constraint, const QString& text);

@@ -256,8 +256,9 @@ bool is_brep_kind(NodeKind k) {
 
 const std::vector<std::string>& attr_names(NodeKind k) {
     static const std::vector<std::string> edges{"edges"}, faces{"faces"}, step{"path", "sha256"}, ref{"name"},
-        solid{"ends", "join"}, fig{"preset"}, mbase{"texture"}, weap{"type"}, attach{"hand"}, cutattr{"mode", "keep", "path", "dir", "eye"}, none;
+        solid{"ends", "join"}, fig{"preset"}, mbase{"texture"}, weap{"type"}, attach{"hand"}, cutattr{"mode", "keep", "path", "dir", "eye"}, modelattr{"weights", "rest"}, none;
     switch (k) {
+        case NodeKind::Model: return modelattr;
         case NodeKind::Cut: return cutattr;
         case NodeKind::Weapon: return weap;
         case NodeKind::Attach: return attach;
@@ -327,7 +328,9 @@ NodePtr make_imported(std::shared_ptr<const Mesh> mesh, std::string path, std::s
 }
 
 NodePtr make_model(std::shared_ptr<const rig::ModelAsset> asset, std::string path, std::string sha,
-                   std::map<std::string, Param> params) {
+                   std::map<std::string, Param> params, std::map<std::string, std::string> attrs) {
+    for (const auto& [k, v] : attrs)
+        if (k != "weights" && k != "rest") throw GeometryError("model has no attribute '" + k + "'");
     if (!asset) throw GeometryError("model: no data");
     check_names(NodeKind::Model, params);
     auto n = std::make_shared<Node>();
@@ -336,6 +339,7 @@ NodePtr make_model(std::shared_ptr<const rig::ModelAsset> asset, std::string pat
     n->source_path = std::move(path);
     n->source_sha256 = std::move(sha);
     n->params = with_defaults(NodeKind::Model, std::move(params));
+    n->attrs = std::move(attrs);
     return n;
 }
 
@@ -607,6 +611,7 @@ std::string to_python(const NodePtr& n) {
                 if (sp.dim == dims::kAngle && p.expr.empty() && p.value == 0.0) continue;  // unposed angles stay implicit
                 o << ", " << sp.name << "=" << param_to_python(p, sp.dim);
             }
+            for (const auto& [k, v] : n->attrs) o << ", " << k << "=" << py_str(v);
             o << ")";
             break;
         case NodeKind::Ref:
@@ -1263,6 +1268,11 @@ struct Evaluator {
                 auto pr = std::make_shared<PosedRig>();
                 pr->rig = A.rig;
                 pr->rig.scale(s);
+                if (auto it = n->attrs.find("rest"); it != n->attrs.end()) {
+                    if (it->second != "normalize" && it->second != "file")
+                        throw GeometryError("model: rest must be 'normalize' (arms hanging at pose 0) or 'file'");
+                    pr->rig.normalize_arms = it->second == "normalize";
+                }
                 std::map<std::string, double> pose;
                 for (const auto& pn : figure::pose_names()) pose[pn] = get(n, pn.c_str());
                 pr->joints = rig::pose_joints(pr->rig, pose);

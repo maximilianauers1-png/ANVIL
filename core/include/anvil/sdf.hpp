@@ -120,7 +120,10 @@ Grid from_mesh(const Mesh& m, double h);
 /// (cap_boundaries), the sign is the generalized winding number |w| > 1/2
 /// (winding.hpp), the magnitude the unsigned distance. `capped` (optional)
 /// receives the number of cap triangles (0 = the input was closed).
-Grid from_mesh_robust(const Mesh& m, double h, std::size_t* capped = nullptr);
+Grid from_mesh_robust(const Mesh& m, double h, std::size_t* capped = nullptr, bool boundary_distance = true);
+/// boundary_distance = false: values are distances to any triangle (only the
+/// sign is exact; enough for occupancy, e.g. skin weights) -- skips the
+/// per-triangle boundary classification.
 /// Fills enclosed voids: positive voxels not connected (6-neighbourhood)
 /// to the outside become negative. Prints need no trapped-resin pockets, and
 /// folds of posed skins enclose pockets with winding number 0. Returns the

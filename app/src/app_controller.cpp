@@ -275,6 +275,13 @@ QString AppController::objectKind(const QString& name) const {
     return o && o->root ? QString(node_kind_name(o->root->kind)) : QString();
 }
 
+QString AppController::objectAttr(const QString& name, const QString& key) const {
+    const Object* o = session_->document().state()->find(name.toStdString());
+    if (!o || !o->root) return {};
+    auto it = o->root->attrs.find(key.toStdString());
+    return it == o->root->attrs.end() ? QString() : QString::fromStdString(it->second);
+}
+
 QString AppController::uniqueName(const QString& base) const {
     auto st = session_->document().state();
     for (int i = 1;; ++i) {

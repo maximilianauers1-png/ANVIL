@@ -60,6 +60,8 @@ struct Rig {
     std::vector<std::array<std::uint16_t, 4>> joints;
     std::vector<std::array<float, 4>> weights;
     bool automatic = false;     // fitted by auto_rig (no skin in the file)
+    bool normalize_arms = true; // pose 0 = arms hanging (false: pose 0 = the file's rest pose)
+    std::size_t rigid_parts = 0;  // separate shells bound rigidly to one bone
 
     int find(Role r, int s = 0) const;
     /// Uniform scale about the origin (the model stands on z = 0, centred).
@@ -76,6 +78,30 @@ Rig from_skin(const Skin& skin, std::size_t vertex_count);
 /// bones with an inside-the-mesh visibility test (generalized winding
 /// number) and an exponential falloff between nearby bones.
 Rig auto_rig(const Mesh& m);
+
+/// Geodesic voxel skin weights (after Dionne & de Lasa 2013, "Geodesic voxel
+/// binding for production character meshes"): the robustly voxelized solid,
+/// a multi-source Dijkstra per bone through its inside voxels (26-neighbour
+/// steps h, h sqrt 2, h sqrt 3), weights exp(-(d - d_min) / sigma) over the
+/// bones within 3 sigma of the nearest, sigma = 2 % of the height, top 4,
+/// then two one-ring smoothing passes. Distances run through the material
+/// only, so weights never jump across a gap (arm to torso, leg to leg, a
+/// shoulder pad to the head).
+void geodesic_weights(Rig& rig, const Mesh& m);
+/// Separate shells smaller than `max_size` (bounding-box diagonal, mm) --
+/// armour plates, pauldrons, pouches, a separate hand or head -- follow one
+/// bone rigidly: the bone nearest to the shell's centroid among those that
+/// carry weight on it. Blended weights would bend or tear them (pose
+/// distortion). Returns the number of rigid shells.
+std::size_t rigidify_parts(Rig& rig, const Mesh& m, double max_size);
+
+/// Edge-length ratio posed / rest (both at the same scale): how much posing
+/// stretches or compresses the surface.
+struct Distortion {
+    double max_ratio = 1, p99_ratio = 1;   // max(r, 1/r) over the edges
+    double frac_over_1_5 = 0;              // fraction of edges stretched/compressed > 1.5x
+};
+Distortion distortion(const Mesh& rest, const Mesh& posed);
 
 /// Posed joint transforms (rest -> posed) for pose angles in radians
 /// (missing angles are 0).
@@ -97,6 +123,12 @@ struct ModelAsset {
     std::string format;
     std::size_t parts = 0;
 };
-std::shared_ptr<const ModelAsset> make_asset(ModelData md, double height0);
+/// weights: "file" (the skin's own weights; auto rig if none) or "auto"
+/// (geodesic weights for the file's skeleton too); rigid: rigid shells.
+struct AssetOptions {
+    std::string weights = "file";
+    bool rigid = true;
+};
+std::shared_ptr<const ModelAsset> make_asset(ModelData md, double height0, const AssetOptions& opt = {});
 
 }  // namespace anvil::rig

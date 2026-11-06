@@ -223,6 +223,7 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
             return d;
         })
         .def("children", [](const NodeHandle& n) { return n.node->child_names(); })
+        .def("attrs", [](const NodeHandle& n) { return n.node->attrs; })
         .def("child", [](const NodeHandle& n, const std::string& path) { return NodeHandle{node_at(n.node, path)}; })
         .def("same", [](const NodeHandle& a, const NodeHandle& b) { return a.node == b.node; })
         .def("model_info", [](const NodeHandle& n) {
@@ -236,6 +237,7 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
             d["triangles"] = a.mesh.F.size();
             d["vertices"] = a.mesh.V.size();
             d["rig"] = a.rig.automatic ? "automatic" : "file";
+            d["rigid_parts"] = a.rig.rigid_parts;
             d["joints"] = a.rig.names;
             return d;
         })
@@ -359,7 +361,8 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
 
     // Imported minis: the asset (mesh + rig; the automatic rig takes a moment)
     // is cached per file hash, so replaying the journal or reloading is fast.
-    m.def("load_model", [](const std::string& path, const std::string& sha, const ParamDict& p) {
+    m.def("load_model", [](const std::string& path, const std::string& sha, const ParamDict& p,
+                           const std::map<std::string, std::string>& attrs) {
         static std::mutex mu;
         static std::map<std::string, std::weak_ptr<const rig::ModelAsset>> cache;
         std::filesystem::path fp = upath(path);
@@ -368,20 +371,40 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         if (!sha.empty() && sha != h)
             throw std::runtime_error("'" + path + "' changed since it was imported (sha256 " + h.substr(0, 12) +
                                      "... != " + sha.substr(0, 12) + "...)");
+        const std::string weights = attrs.count("weights") ? attrs.at("weights") : "file";
+        if (weights != "file" && weights != "auto") throw std::invalid_argument("weights must be 'file' or 'auto'");
         std::shared_ptr<const rig::ModelAsset> asset;
         {
             std::lock_guard lk(mu);
-            asset = cache[h].lock();
+            asset = cache[h + "|" + weights].lock();
         }
         if (!asset) {
             py::gil_scoped_release nogil;
-            asset = rig::make_asset(read_model(fp), tol::kDefaultMiniHeightMm);
+            rig::AssetOptions ao;
+            ao.weights = weights;
+            asset = rig::make_asset(read_model(fp), tol::kDefaultMiniHeightMm, ao);
             std::lock_guard lk(mu);
-            cache[h] = asset;
+            cache[h + "|" + weights] = asset;
         }
-        return std::make_tuple(NodeHandle{make_model(asset, path, h, to_params(p))}, h);
+        return std::make_tuple(NodeHandle{make_model(asset, path, h, to_params(p), attrs)}, h);
     });
     m.def("weapon_types", [] { return weapon::types(); });
+    // pose distortion: edge-length ratios of the posed vs. the rest mesh (same scale)
+    m.def("pose_distortion", [](const NodeHandle& n) {
+        if (n.node->kind != NodeKind::Model) throw std::invalid_argument("not an imported model");
+        auto sh = eval_node(n, tol::kDefaultChordMm);
+        const auto& a = *n.node->model;
+        // the rest mesh at the evaluated height (height / height0); the lift does not change lengths
+        Mesh rest = a.mesh;
+        const double k = n.node->params.at("height").value / a.height0;
+        for (auto& v : rest.V) v = v * k;
+        const auto d = rig::distortion(rest, *sh->mesh);
+        py::dict r;
+        r["max"] = d.max_ratio;
+        r["p99"] = d.p99_ratio;
+        r["over_1_5"] = d.frac_over_1_5;
+        return r;
+    });
     // memory of the evaluation caches (bytes are estimates)
     m.def("cache_stats", [] {
         py::dict d;

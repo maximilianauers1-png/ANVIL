@@ -124,7 +124,7 @@ NodePtr make_ref(const std::string& object_name);
 NodePtr make_sculpt(NodePtr src, double voxel_mm, std::vector<sdf::Stroke> strokes);
 /// Imported, posable mini: the asset (rest mesh + rig), its file and hash, height and pose angles.
 NodePtr make_model(std::shared_ptr<const rig::ModelAsset> asset, std::string path, std::string sha256,
-                   std::map<std::string, Param> params);
+                   std::map<std::string, Param> params, std::map<std::string, std::string> attrs = {});
 /// Allowed attribute names per kind.
 const std::vector<std::string>& attr_names(NodeKind k);
 

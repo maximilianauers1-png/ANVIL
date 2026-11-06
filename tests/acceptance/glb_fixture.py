@@ -88,7 +88,37 @@ def _tube_mesh(a, c, r, sides=8, rings=10):
     return V, T, F
 
 
-def humanoid_glb(path, rigged=True, sides=8, rings=10):
+def _box_mesh(lo, hi, n=8):
+    """Closed box subdivided n x n on every face (outward winding)."""
+    V, F, idx = [], [], {}
+
+    def vid(p):
+        k = tuple(round(c, 9) for c in p)
+        if k not in idx:
+            idx[k] = len(V)
+            V.append(list(p))
+        return idx[k]
+    for ax in range(3):
+        for side in (0, 1):
+            u, w = [a for a in range(3) if a != ax]
+            for i in range(n):
+                for j in range(n):
+                    def pt(a, b):
+                        p = [0.0, 0.0, 0.0]
+                        p[ax] = hi[ax] if side else lo[ax]
+                        p[u] = lo[u] + (hi[u] - lo[u]) * a / n
+                        p[w] = lo[w] + (hi[w] - lo[w]) * b / n
+                        return p
+                    q = [vid(pt(i, j)), vid(pt(i + 1, j)), vid(pt(i + 1, j + 1)), vid(pt(i, j + 1))]
+                    # (u, w, ax) right-handed for ax = 0, 2 with this ordering; flip to point outwards
+                    flip = (side == 0) != (ax == 1)
+                    if flip:
+                        q = q[::-1]
+                    F += [(q[0], q[1], q[2]), (q[0], q[2], q[3])]
+    return V, F
+
+
+def humanoid_glb(path, rigged=True, sides=8, rings=10, pauldrons=False):
     names = [n for n, _, _ in BONES]
     index = {n: i for i, n in enumerate(names)}
     pos, joints, weights, idx = [], [], [], []
@@ -106,6 +136,22 @@ def humanoid_glb(path, rigged=True, sides=8, rings=10):
             joints.append((index[bone], index[nxt] if nxt else 0, 0, 0))
             weights.append((1.0 - w2, w2, 0.0, 0.0))
         idx += [base + i for f in F for i in f]
+    if pauldrons:
+        # armour plates over the shoulders (separate shells), weights blended
+        # chest -> upper arm across the plate, as automatic riggers produce them
+        for sx in (1, -1):
+            side = "Left" if sx > 0 else "Right"
+            x0, x1 = 0.10, 0.34
+            lo = (min(sx * x0, sx * x1), 1.44, -0.11)
+            hi = (max(sx * x0, sx * x1), 1.52, 0.11)
+            V, F = _box_mesh(lo, hi, 10)
+            base = len(pos)
+            for p in V:
+                pos.append(p)
+                t = min(1.0, max(0.0, (abs(p[0]) - x0) / (x1 - x0)))
+                joints.append((index["mixamorig:Spine1"], index["mixamorig:" + side + "Arm"], 0, 0))
+                weights.append((1.0 - t, t, 0.0, 0.0))
+            idx += [base + i for f in F for i in f]
     blob = bytearray()
 
     def add(data, fmt, count, comp, typ, target=None, minmax=False):
@@ -167,4 +213,5 @@ def humanoid_glb(path, rigged=True, sides=8, rings=10):
 
 if __name__ == "__main__":
     import sys
-    humanoid_glb(sys.argv[1] if len(sys.argv) > 1 else "humanoid.glb", rigged="--unrigged" not in sys.argv)
+    humanoid_glb(sys.argv[1] if len(sys.argv) > 1 else "humanoid.glb", rigged="--unrigged" not in sys.argv,
+                 pauldrons="--pauldrons" in sys.argv)
