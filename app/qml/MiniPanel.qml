@@ -3,7 +3,8 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Anvil.Native
 
-// Mini Forge: figure -> pose -> base -> sculpt details -> print.
+// Mini Forge: import (Tripo, Meshy, ...) or generate -> pose -> weapons ->
+// base -> merge -> sculpt details -> print.
 // Every button is one Python command; pose angles and proportions are normal
 // parameters in the panel on the right (type or drag their names).
 Rectangle {
@@ -13,7 +14,11 @@ Rectangle {
         for (var i = 0; i < App.objects.length; ++i) if (App.objects[i].name === n) return App.objects[i].kind
         return ""
     }
-    readonly property bool selFigure: sel !== "" && kindOf(sel) === "Figure"
+    readonly property bool selModel: sel !== "" && kindOf(sel) === "Model"
+    readonly property bool selFigure: sel !== "" && (kindOf(sel) === "Figure" || selModel)
+    readonly property bool selAttach: sel !== "" && kindOf(sel) === "Attach"
+    property string hand: "r"
+    readonly property var printable: App.objects.filter(function (o) { return o.visible && o.kind !== "Sketch" }).map(function (o) { return o.name })
     readonly property var figures: App.objects.filter(function (o) { return o.kind === "Figure" || o.kind === "Sculpt" }).map(function (o) { return o.name })
     readonly property var bases: App.objects.filter(function (o) { return o.kind === "MiniBase" }).map(function (o) { return o.name })
     radius: Theme.radius
@@ -31,6 +36,12 @@ Rectangle {
         ALabel { text: "MINI FORGE"; font.bold: true }
 
         Section { text: "1  FIGURE" }
+        AButton {
+            objectName: "miniImport"
+            Layout.fillWidth: true
+            text: "Import mini (Tripo, Meshy: GLB / OBJ)…"
+            onClicked: App.runCommand("mini.import")
+        }
         RowLayout {
             spacing: 4
             AButton { objectName: "miniDemon"; text: "New demon"; onClicked: App.runCommand("mini.demon") }
@@ -73,7 +84,41 @@ Rectangle {
             text: "Fine-tune every joint on the right: drag a name (e.g. l_elbow, tail_curl) sideways. Build and heroic change the proportions."
         }
 
-        Section { text: "3  BASE" }
+        Section { text: "3  WEAPONS"; visible: root.selModel || root.selAttach }
+        RowLayout {
+            visible: root.selModel
+            spacing: 4
+            ALabel { text: "Hand" }
+            AButton { objectName: "handR"; text: "Right"; primary: root.hand === "r"; onClicked: root.hand = "r" }
+            AButton { objectName: "handL"; text: "Left"; primary: root.hand === "l"; onClicked: root.hand = "l" }
+        }
+        GridLayout {
+            visible: root.selModel
+            columns: 3
+            columnSpacing: 3
+            rowSpacing: 3
+            Repeater {
+                model: [["longsword", "Longsword"], ["zweihander", "Zweihänder"], ["buster", "Buster sword"],
+                        ["dagger", "Dagger"], ["axe", "Axe"], ["spear", "Spear"]]
+                delegate: AButton {
+                    objectName: "equip_" + modelData[0]
+                    text: modelData[1]
+                    onClicked: App.runCommand("mini.equip_" + modelData[0] + "_" + root.hand)
+                }
+            }
+        }
+        ALabel {
+            visible: root.selModel || root.selAttach
+            Layout.maximumWidth: 330
+            wrapMode: Text.Wrap
+            dim: true
+            font.pixelSize: Theme.fontSmall
+            text: root.selAttach
+                  ? "Adjust the grip on the right: pitch (blade up/down), yaw, roll, slide. Length, width, thickness: open the item (src)."
+                  : "The weapon follows every pose change. Select it to adjust pitch, yaw, roll and slide."
+        }
+
+        Section { text: "4  BASE" }
         RowLayout {
             spacing: 4
             Repeater {
@@ -96,7 +141,20 @@ Rectangle {
             }
         }
 
-        Section { text: "4  DETAILS" }
+        Section { text: "5  PRINT" }
+        AButton {
+            objectName: "miniMerge"
+            Layout.fillWidth: true
+            enabled: App.selection.length >= 2 || root.printable.length >= 2
+            text: App.selection.length >= 2 ? "Merge " + App.selection.length + " selected for print"
+                                            : "Merge all visible (" + root.printable.length + ") for print"
+            onClicked: {
+                if (App.selection.length < 2) App.selection = root.printable
+                App.runCommand("mini.merge")
+            }
+        }
+
+        Section { text: "6  DETAILS" }
         AButton {
             objectName: "miniSculpt"
             Layout.fillWidth: true

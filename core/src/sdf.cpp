@@ -519,14 +519,20 @@ std::size_t remove_specks(Grid& g, std::size_t max_voxels) {
 }
 
 std::size_t resolve_ambiguous_faces(Grid& g) {
-    // A lattice face whose corners alternate in sign (checkerboard) makes the
-    // contour pass the same cell edge twice: two sheets share an edge, which
-    // no vertex split can separate. Joining the negative diagonal (the
-    // smaller positive corner becomes -kZeroNudge) thickens the solid by less
-    // than one voxel there. Corners of such a face lie within one voxel of the
-    // surface (f is 1-Lipschitz), so only |f| <= h is scanned.
+    // A lattice cell (2x2x2 voxels) whose inside or outside corners form more
+    // than one component along the cell edges holds two surface sheets: the
+    // contour gives it one vertex, which joins the sheets (non-manifold edges,
+    // folds after splitting). Such cells are gaps or necks thinner than one
+    // voxel -- below what resin printers resolve. They are closed towards the
+    // solid: split inside corners are joined by making the outside corner
+    // with the smallest value inside; split outside corners keep only their
+    // largest component. Values only ever go from outside to inside, so the
+    // rounds terminate. Corners of such a cell lie within one voxel of the
+    // surface (f is 1-Lipschitz), so only cells whose first corner has
+    // |f| <= sqrt 3 h are visited.
+    static const int E[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
     std::size_t total = 0;
-    for (int round = 0; round < 4; ++round) {
+    for (int round = 0; round < 8; ++round) {
         std::vector<IVec3> coords;
         for (const auto& [c, _] : g.bricks()) coords.push_back(c);
         std::sort(coords.begin(), coords.end(), [](const IVec3& a, const IVec3& b) { return std::tie(a.z, a.y, a.x) < std::tie(b.z, b.y, b.x); });
@@ -537,25 +543,37 @@ std::size_t resolve_ambiguous_faces(Grid& g) {
                 for (int y = 0; y < kBrick; ++y)
                     for (int x = 0; x < kBrick; ++x) {
                         const int i = b.x * kBrick + x, j = b.y * kBrick + y, k = b.z * kBrick + z;
-                        const float v00 = g.at(i, j, k);
-                        if (std::abs(v00) > 1.0f) continue;
-                        const int ax[3][2][3] = {{{1, 0, 0}, {0, 1, 0}}, {{1, 0, 0}, {0, 0, 1}}, {{0, 1, 0}, {0, 0, 1}}};
-                        for (const auto& pl : ax) {
-                            const int* a = pl[0];
-                            const int* c = pl[1];
-                            const float v10 = g.at(i + a[0], j + a[1], k + a[2]);
-                            const float v01 = g.at(i + c[0], j + c[1], k + c[2]);
-                            const float v11 = g.at(i + a[0] + c[0], j + a[1] + c[1], k + a[2] + c[2]);
-                            const bool n00 = v00 < 0, n10 = v10 < 0, n01 = v01 < 0, n11 = v11 < 0;
-                            if (n00 != n11 || n10 != n01 || n00 == n10) continue;
-                            // positive pair: (00, 11) or (10, 01); flip the smaller one
-                            if (!n00) {
-                                if (v00 <= v11) fixes[bi].push_back({i, j, k});
-                                else fixes[bi].push_back({i + a[0] + c[0], j + a[1] + c[1], k + a[2] + c[2]});
-                            } else {
-                                if (v10 <= v01) fixes[bi].push_back({i + a[0], j + a[1], k + a[2]});
-                                else fixes[bi].push_back({i + c[0], j + c[1], k + c[2]});
-                            }
+                        if (std::abs(g.at(i, j, k)) > 1.7321f) continue;
+                        float v[8];
+                        int npos = 0;
+                        for (int c = 0; c < 8; ++c) {
+                            v[c] = g.at(i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1));
+                            npos += v[c] > 0;
+                        }
+                        if (npos == 0 || npos == 8) continue;
+                        // components per sign along the 12 cell edges
+                        int comp[8];
+                        for (int c = 0; c < 8; ++c) comp[c] = c;
+                        auto find = [&](int c) { while (comp[c] != c) c = comp[c] = comp[comp[c]]; return c; };
+                        for (const auto& e : E)
+                            if ((v[e[0]] > 0) == (v[e[1]] > 0)) comp[find(e[0])] = find(e[1]);
+                        int size[8] = {}, roots_pos = 0, roots_neg = 0;
+                        for (int c = 0; c < 8; ++c) ++size[find(c)];
+                        for (int c = 0; c < 8; ++c)
+                            if (find(c) == c) (v[c] > 0 ? roots_pos : roots_neg) += 1;
+                        if (roots_pos <= 1 && roots_neg <= 1) continue;
+                        auto at = [&](int c) { return std::array<int, 3>{i + (c & 1), j + ((c >> 1) & 1), k + ((c >> 2) & 1)}; };
+                        if (roots_neg > 1) {
+                            int best = -1;
+                            for (int c = 0; c < 8; ++c)
+                                if (v[c] > 0 && (best < 0 || v[c] < v[best])) best = c;
+                            fixes[bi].push_back(at(best));
+                        } else {
+                            int big = -1;
+                            for (int c = 0; c < 8; ++c)
+                                if (v[c] > 0 && (big < 0 || size[find(c)] > size[find(big)])) big = c;
+                            for (int c = 0; c < 8; ++c)
+                                if (v[c] > 0 && find(c) != find(big)) fixes[bi].push_back(at(c));
                         }
                     }
         });
@@ -563,8 +581,8 @@ std::size_t resolve_ambiguous_faces(Grid& g) {
         for (const auto& f : fixes)
             for (const auto& p : f)
                 if (const float v = g.at(p[0], p[1], p[2]); v > 0) {
-                    // mirrored value (>= 1/4 voxel): the contour crosses the joined
-                    // edges well inside them instead of at the lattice point itself
+                    // mirrored (at least 1/4 voxel): the contour crosses the joined
+                    // edges inside them instead of at the lattice point itself
                     g.set(p[0], p[1], p[2], -std::max(v, 0.25f));
                     g.touch_mesh({floor_div(p[0], kBrick), floor_div(p[1], kBrick), floor_div(p[2], kBrick)});
                     ++n;
@@ -573,6 +591,43 @@ std::size_t resolve_ambiguous_faces(Grid& g) {
         if (n == 0) break;
     }
     return total;
+}
+
+std::size_t clamp_crossings(Grid& g) {
+    // Contouring ignores lattice edges with |a| + |b| >= 2.5 h (band-edge
+    // jumps between clamped values). Where the signs really change, the zero
+    // set lies on the edge, so each end is at most h from it: clamp both to
+    // |f| <= h. Sign flips of the clean-up passes and bricks next to implied
+    // (unallocated) ones otherwise leave such edges uncontoured -- holes.
+    std::vector<IVec3> coords;
+    for (const auto& [c, _] : g.bricks()) coords.push_back(c);
+    std::sort(coords.begin(), coords.end(), [](const IVec3& a, const IVec3& b) { return std::tie(a.z, a.y, a.x) < std::tie(b.z, b.y, b.x); });
+    std::vector<std::vector<std::array<int, 3>>> fixes(coords.size());
+    parallel_for(coords.size(), [&](std::size_t bi) {
+        const IVec3 b = coords[bi];
+        for (int z = 0; z < kBrick; ++z)
+            for (int y = 0; y < kBrick; ++y)
+                for (int x = 0; x < kBrick; ++x) {
+                    const int i = b.x * kBrick + x, j = b.y * kBrick + y, k = b.z * kBrick + z;
+                    const float v = g.at(i, j, k);
+                    const int nb[6][3] = {{i - 1, j, k}, {i + 1, j, k}, {i, j - 1, k}, {i, j + 1, k}, {i, j, k - 1}, {i, j, k + 1}};
+                    for (const auto& c : nb) {
+                        const float w = g.at(c[0], c[1], c[2]);
+                        if ((v < 0) == (w < 0)) continue;
+                        if (std::abs(v) > 1.0f) fixes[bi].push_back({i, j, k});
+                        if (std::abs(w) > 1.0f) fixes[bi].push_back({c[0], c[1], c[2]});  // may lie in an implied brick
+                    }
+                }
+    });
+    std::size_t n = 0;
+    for (const auto& f : fixes)
+        for (const auto& p : f)
+            if (const float v = g.at(p[0], p[1], p[2]); std::abs(v) > 1.0f) {
+                g.set(p[0], p[1], p[2], v < 0 ? -1.0f : 1.0f);
+                g.touch_mesh({floor_div(p[0], kBrick), floor_div(p[1], kBrick), floor_div(p[2], kBrick)});
+                ++n;
+            }
+    return n;
 }
 
 std::size_t clean_for_print(Grid& g) {
@@ -585,7 +640,7 @@ std::size_t clean_for_print(Grid& g) {
         total += n;
         if (n == 0) break;
     }
-    return total;
+    return total + clamp_crossings(g);  // signs are final: make every crossing contourable
 }
 
 Grid from_mesh_robust(const Mesh& input, double h, std::size_t* capped) {

@@ -136,6 +136,9 @@ std::size_t resolve_ambiguous_faces(Grid& g);
 /// fill_cavities, remove_specks (27 voxels) and resolve_ambiguous_faces to a
 /// fixed point: a closed, manifold, void-free contour. Returns voxels changed.
 std::size_t clean_for_print(Grid& g);
+/// Clamps both ends of every sign-changing lattice edge to |f| <= h (the zero
+/// set lies between them), so that contouring never skips a real crossing.
+std::size_t clamp_crossings(Grid& g);
 
 /// Dual contouring (Ju et al. 2002 topology: one quad per sign-changing
 /// lattice edge) of the cells owned by one chunk (chunk coordinates in units

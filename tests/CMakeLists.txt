@@ -23,7 +23,7 @@ if(ANVIL_BUILD_APP)
   add_test(NAME acceptance_m1_gui
            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/run_gui_selftest.py
                    $<TARGET_FILE:anvil> $<TARGET_FILE:anvil-cli> ${PROJECT_SOURCE_DIR}/examples/magnet_base.py)
-  set_tests_properties(acceptance_m1_gui PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 400 LABELS gui)
+  set_tests_properties(acceptance_m1_gui PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1000 LABELS gui)
 endif()
 
 add_test(NAME shaders_up_to_date COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/compile_shaders.py --check)

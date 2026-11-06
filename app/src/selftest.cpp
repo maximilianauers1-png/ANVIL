@@ -10,6 +10,7 @@
 #include <QMouseEvent>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QUrl>
 
 #include <cmath>
 
@@ -290,6 +291,39 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
         view_->frameAll();
     }, [this] { return idle(); });
     add("screenshot mini", [this] { screenshot("13_mini"); });
+
+    // 17) M4: import a rigged GLB (as from Tripo / Meshy) -> pose -> weapon -> merge for print
+    if (const QString glb = qEnvironmentVariable("ANVIL_TEST_GLB"); !glb.isEmpty()) {
+        add("import mini (drop GLB)", [this, glb] {
+            app_->setSelection({});
+            for (const auto& o : app_->objects())
+                if (o.toMap()["visible"].toBool()) app_->toggleVisible(o.toMap()["name"].toString());
+            app_->dropFiles({QUrl::fromLocalFile(glb)});
+        }, [this] { return idle() && hasObject("hero"); }, 60000);
+        add("pose imported mini: attack", [this] {
+            app_->setSelection({"hero"});
+            clickItem("pose_attack");
+        }, [this] {
+            auto h = app_->history();
+            if (!idle() || h.isEmpty()) return false;
+            const QString src = h.back().toMap()["source"].toString();
+            return src.startsWith("pose(") && src.contains("hero") && src.contains("attack");
+        }, 30000);
+        add("equip zweihander (right hand)", [this] {
+            clickItem("handR");
+            clickItem("equip_zweihander");
+        }, [this] { return idle() && hasObject("Zweihander1"); }, 60000);
+        add("frame imported mini", [this] {
+            app_->requestView("iso");
+            view_->frameAll();
+        }, [this] { return idle(); });
+        add("screenshot imported mini", [this] { screenshot("14_mini_import"); });
+        add("merge for print", [this] {
+            app_->setSelection({"hero", "Zweihander1"});
+            clickItem("miniMerge");
+        }, [this] { return idle() && hasObject("Mini1") && view_->sculptObjects().contains("Mini1"); }, 180000);
+        add("screenshot merged mini", [this] { screenshot("15_mini_merged"); });
+    }
     add("back to Design (mini)", [this] { app_->setMode("Design"); }, [this] { return true; });
 
     // 14) Studio scenery: sunset, fjord, night (procedural environment pass)

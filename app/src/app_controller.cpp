@@ -1038,8 +1038,11 @@ QString AppController::dropFiles(const QList<QUrl>& urls) {
         QString ext = QFileInfo(p).suffix().toLower();
         if (ext == "stl") execute("import_stl(" + pyStr(QDir::toNativeSeparators(p)) + ")", "ui");
         else if (ext == "anvil") openDocument(p);
-        else if (ext == "step" || ext == "stp") notes << QFileInfo(p).fileName() + ": STEP import arrives with the B-Rep kernel (M2)";
-        else if (ext == "obj" || ext == "3mf") notes << QFileInfo(p).fileName() + ": OBJ/3MF import arrives in M5";
+        else if (ext == "step" || ext == "stp") execute("import_step(" + pyStr(QDir::toNativeSeparators(p)) + ")", "ui");
+        else if (ext == "glb" || ext == "gltf" || ext == "obj")  // minis from Tripo, Meshy, Blender: posable
+            execute("import_model(" + pyStr(QDir::toNativeSeparators(p)) + ", height=32*mm)", "ui");
+        else if (ext == "fbx") notes << QFileInfo(p).fileName() + ": FBX is not supported; export the model as GLB (Tripo, Meshy and Blender can)";
+        else if (ext == "3mf") notes << QFileInfo(p).fileName() + ": 3MF import arrives in M5";
         else if (ext == "png") notes << QFileInfo(p).fileName() + ": image input arrives with the AI tools (M6)";
         else if (ext == "keras") notes << QFileInfo(p).fileName() + ": Keras models arrive with the Neural Lab (M6)";
         else notes << QFileInfo(p).fileName() + ": unsupported file type";

@@ -4,6 +4,7 @@ import Anvil.Native
 
 Item {
     function importStl() { importDlg.open() }
+    function importModel() { modelDlg.open() }
     function save() { saveDlg.open() }
     function open() { openDlg.open() }
     function importStep() { stepInDlg.open() }
@@ -28,6 +29,13 @@ Item {
         title: "Import STL"
         fileMode: FileDialog.OpenFiles
         nameFilters: ["STL files (*.stl)"]
+        onAccepted: App.dropFiles(selectedFiles)
+    }
+    FileDialog {
+        id: modelDlg
+        title: "Import mini (Tripo, Meshy, Blender, ...)"
+        fileMode: FileDialog.OpenFiles
+        nameFilters: ["3D models (*.glb *.gltf *.obj *.stl)", "glTF (*.glb *.gltf)", "Wavefront OBJ (*.obj)"]
         onAccepted: App.dropFiles(selectedFiles)
     }
     FileDialog {

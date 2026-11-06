@@ -351,6 +351,29 @@ for _p in ("stand", "walk", "attack", "cast", "guard"):
                          build=(lambda p: (lambda ctx: f"pose({ctx.selection[0]!r}, {p!r})"))(_p)))
 
 
+@command("mini.import", "Import mini (GLB / OBJ)…", "Mini",
+         "Import a mini from Tripo, Meshy, Blender, ... (.glb, .gltf, .obj, .stl), 32 mm tall, ready to pose",
+         ui="model_import_dialog", keywords="tripo meshy gltf glb obj import model")
+def _(ctx):
+    return None
+
+
+for _w, _label in (("longsword", "Longsword"), ("zweihander", "Zweihänder"), ("buster", "Buster sword"),
+                   ("dagger", "Dagger"), ("axe", "Axe"), ("spear", "Spear")):
+    for _h, _hl in (("r", "right"), ("l", "left")):
+        registry.add(Command(id=f"mini.equip_{_w}_{_h}", label=f"{_label} ({_hl} hand)", category="Mini",
+                             help=f"Put a {_label.lower()} in the selected imported mini's {_hl} hand (follows the pose)",
+                             min_selection=1, max_selection=1, keywords="weapon sword accessory equip hand",
+                             build=(lambda w, h: (lambda ctx: f"equip({ctx.selection[0]!r}, {w!r}, hand={h!r})"))(_w, _h)))
+
+
+@command("mini.merge", "Merge for print", "Mini",
+         "Merge the selected objects (mini, weapons, base, other parts) into one closed printable object; parts stay linked",
+         min_selection=2, keywords="merge join combine print union")
+def _(ctx):
+    return "merge(" + ", ".join(repr(n) for n in ctx.selection) + ")"
+
+
 @command("mini.on_base", "Stand on base", "Mini", "Join the selected figure and base into one clay object",
          min_selection=2, max_selection=2, keywords="join union merge base")
 def _(ctx):
@@ -370,6 +393,9 @@ _EDIT = {"submenu": "Edit", "items": ["edit.fillet", "edit.shell", "edit.chamfer
                                       "boolean.union", "boolean.intersect", ""]}
 _BRUSHES_MORE = {"submenu": "Brushes", "items": ["sculpt.inflate", "sculpt.crease", "sculpt.pinch", "sculpt.flatten",
                                                 "sculpt.texture", "", "", ""]}
+_WEAPONS = {"submenu": "Weapon", "items": ["mini.equip_longsword_r", "mini.equip_zweihander_r", "mini.equip_buster_r",
+                                          "mini.equip_dagger_l", "mini.equip_axe_r", "mini.equip_spear_r",
+                                          "mini.equip_longsword_l", "mini.on_base"]}
 registry.radial = {
     "Design": {
         # most used first and stable: drawing tools sit on the top half
@@ -382,10 +408,10 @@ registry.radial = {
     },
     # Mini mode: create figures and bases, pose, join
     "Mini": {
-        "empty": ["mini.demon", "mini.human", "mini.base32", "mini.base25", "mini.base40", "mini.base50",
+        "empty": ["mini.import", "mini.human", "mini.base32", "mini.base25", "mini.base40", "mini.demon",
                   "file.export_stl", _VIEW],
-        "selection": ["mini.pose_attack", "mini.pose_walk", "mini.pose_stand", "mini.pose_cast", "mini.on_base",
-                      "sculpt.make", "file.export_stl", _VIEW],
+        "selection": ["mini.pose_attack", "mini.pose_walk", "mini.pose_stand", "mini.pose_cast", _WEAPONS,
+                      "mini.merge", "file.export_stl", _VIEW],
     },
     # Sculpt mode: brushes always in the same places, with or without selection
     "Sculpt": {

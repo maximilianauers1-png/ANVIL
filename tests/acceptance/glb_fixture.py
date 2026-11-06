@@ -88,7 +88,7 @@ def _tube_mesh(a, c, r, sides=8, rings=10):
     return V, T, F
 
 
-def humanoid_glb(path, rigged=True):
+def humanoid_glb(path, rigged=True, sides=8, rings=10):
     names = [n for n, _, _ in BONES]
     index = {n: i for i, n in enumerate(names)}
     pos, joints, weights, idx = [], [], [], []
@@ -97,7 +97,7 @@ def humanoid_glb(path, rigged=True):
             d = [c[i] - a[i] for i in range(3)]
             L = math.sqrt(sum(x * x for x in d))
             c = tuple(c[i] + d[i] / L * 0.03 for i in range(3))
-        V, T, F = _tube_mesh(a, c, r)
+        V, T, F = _tube_mesh(a, c, r, sides, rings)
         base = len(pos)
         for p, t in zip(V, T):
             pos.append(p)
