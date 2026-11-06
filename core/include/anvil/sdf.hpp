@@ -115,6 +115,12 @@ double voxel_step(double wanted);
 /// by BVH closest-point queries, sign from the angle-weighted pseudonormal of
 /// the closest feature (Baerentzen & Aanaes 2005, IEEE TVCG 11(3)).
 Grid from_mesh(const Mesh& m, double h);
+/// Grid from any triangle soup -- holes, overlapping shells, flipped
+/// orientation, as produced by AI model generators: boundaries are capped
+/// (cap_boundaries), the sign is the generalized winding number |w| > 1/2
+/// (winding.hpp), the magnitude the unsigned distance. `capped` (optional)
+/// receives the number of cap triangles (0 = the input was closed).
+Grid from_mesh_robust(const Mesh& m, double h, std::size_t* capped = nullptr);
 
 /// Dual contouring (Ju et al. 2002 topology: one quad per sign-changing
 /// lattice edge) of the cells owned by one chunk (chunk coordinates in units

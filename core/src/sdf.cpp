@@ -13,6 +13,8 @@
 
 #include "anvil/bvh.hpp"
 #include "anvil/sort.hpp"
+#include "anvil/tolerance.hpp"
+#include "anvil/winding.hpp"
 
 namespace anvil::sdf {
 
@@ -211,13 +213,19 @@ std::uint64_t Grid::chunk_key(const IVec3& chunk) const {
 // ------------------------------------------------------------------ construction
 namespace {
 // Fills a brick from f; returns false when the brick lies entirely beyond the band.
-bool fill_brick(const std::function<double(const Vec3&)>& f, const IVec3& b, double h, Brick& out) {
+// Fills all voxels of brick b (index Brick::index) with signed distances (mm).
+using BrickFiller = std::function<void(const IVec3& b, double h, double* vals)>;
+
+bool fill_brick(const std::function<double(const Vec3&)>& f, const BrickFiller* filler, const IVec3& b, double h, Brick& out) {
     bool any = false;
+    double vals[kBrickVoxels];
+    if (filler) (*filler)(b, h, vals);
     for (int z = 0; z < kBrick; ++z)
         for (int y = 0; y < kBrick; ++y)
             for (int x = 0; x < kBrick; ++x) {
                 Vec3 p{double(b.x * kBrick + x) * h, double(b.y * kBrick + y) * h, double(b.z * kBrick + z) * h};
-                float v = float(std::clamp(f(p) / h, double(-kBand), double(kBand)));
+                const double fv = filler ? vals[Brick::index(x, y, z)] : f(p);
+                float v = float(std::clamp(fv / h, double(-kBand), double(kBand)));
                 if (v == 0.0f) v = kZeroNudge;  // see kZeroNudge
                 if (std::abs(v) < kBand) any = true;
                 out.v[Brick::index(x, y, z)] = float_to_half(v);
@@ -225,7 +233,8 @@ bool fill_brick(const std::function<double(const Vec3&)>& f, const IVec3& b, dou
     return any;
 }
 
-Grid build(const std::function<double(const Vec3&)>& f, const Box3& bounds, double h, double slack = 0.0) {
+Grid build(const std::function<double(const Vec3&)>& f, const Box3& bounds, double h, double slack = 0.0,
+           const BrickFiller* filler = nullptr) {
     Grid g(h);
     const double bw = kBrick * h, cw = kChunkBricks * bw;
     const double margin = (kBand + 1) * h + slack;
@@ -275,7 +284,7 @@ Grid build(const std::function<double(const Vec3&)>& f, const Box3& bounds, doub
     std::vector<char> keep(todo.size(), 0), inside(todo.size(), 0);
     parallel_for(todo.size(), [&](std::size_t i) {
         auto b = std::make_shared<Brick>();
-        keep[i] = fill_brick(f, todo[i], h, *b);
+        keep[i] = fill_brick(f, filler, todo[i], h, *b);
         if (!keep[i]) inside[i] = half_to_float(b->v[0]) < 0;
         filled[i] = std::move(b);
     });
@@ -329,6 +338,66 @@ Grid from_mesh(const Mesh& m, double h) {
         return dot(p - hit->point, n) < 0 ? -d : d;
     };
     return build(sdf, m.bounds(), h);
+}
+
+Grid from_mesh_robust(const Mesh& input, double h, std::size_t* capped) {
+    // Sign: generalized winding number |w| > 1/2 of the boundary-capped soup
+    // (ADR 0018). After capping, w is integer valued off the surface, so it is
+    // constant inside any ball that contains no triangle: two lattice
+    // neighbours p, q (|p - q| = h) share the sign if the unsigned distance of
+    // either exceeds h. Inside a brick w is therefore evaluated once per
+    // region the surface separates (typically 1-3 times instead of 512).
+    Mesh m = input;
+    const std::size_t added = cap_boundaries(m);
+    if (capped) *capped = added;
+    const WindingNumber wn(m, tol::kWindingBeta);
+    const Bvh bvh(m);
+    auto inside = [&](const Vec3& p) { return std::abs(wn(p)) > 0.5; };
+    auto f = [&](const Vec3& p) {
+        auto hit = bvh.closest(p);
+        const double d = hit ? std::sqrt(hit->dist2) : double(kBand + 1) * h;
+        return inside(p) ? -d : d;
+    };
+    const BrickFiller filler = [&](const IVec3& b, double hh, double* vals) {
+        const double dmax = double(kBand + 1) * hh;
+        double d[kBrickVoxels];
+        signed char sg[kBrickVoxels] = {};
+        auto pos = [&](int x, int y, int z) {
+            return Vec3{double(b.x * kBrick + x) * hh, double(b.y * kBrick + y) * hh, double(b.z * kBrick + z) * hh};
+        };
+        for (int z = 0; z < kBrick; ++z)
+            for (int y = 0; y < kBrick; ++y)
+                for (int x = 0; x < kBrick; ++x) {
+                    auto hit = bvh.closest(pos(x, y, z), dmax);
+                    d[Brick::index(x, y, z)] = hit ? std::sqrt(hit->dist2) : dmax;
+                }
+        int queue[kBrickVoxels];
+        for (int s0 = 0; s0 < kBrickVoxels; ++s0) {
+            if (sg[s0]) continue;
+            const int x0 = s0 % kBrick, y0 = (s0 / kBrick) % kBrick, z0 = s0 / (kBrick * kBrick);
+            sg[s0] = inside(pos(x0, y0, z0)) ? -1 : 1;
+            int qh = 0, qt = 0;
+            queue[qt++] = s0;
+            while (qh < qt) {
+                const int i = queue[qh++];
+                const int x = i % kBrick, y = (i / kBrick) % kBrick, z = i / (kBrick * kBrick);
+                const int nb[6][3] = {{x - 1, y, z}, {x + 1, y, z}, {x, y - 1, z}, {x, y + 1, z}, {x, y, z - 1}, {x, y, z + 1}};
+                for (const auto& c : nb) {
+                    if (c[0] < 0 || c[1] < 0 || c[2] < 0 || c[0] >= kBrick || c[1] >= kBrick || c[2] >= kBrick) continue;
+                    const int j = Brick::index(c[0], c[1], c[2]);
+                    if (sg[j] || !(d[i] > hh || d[j] > hh)) continue;
+                    sg[j] = sg[i];
+                    queue[qt++] = j;
+                }
+            }
+        }
+        for (int i = 0; i < kBrickVoxels; ++i) {
+            // a voxel exactly on an interior sheet keeps its sign (no zero nudge outwards)
+            const double di = std::max(d[i], double(kZeroNudge) * hh);
+            vals[i] = sg[i] < 0 ? -di : di;
+        }
+    };
+    return build(f, m.bounds(), h, 0.0, &filler);
 }
 
 // ------------------------------------------------------------------ grid booleans

@@ -50,6 +50,13 @@ inline constexpr double kMinVoxelMm = 0.01;
 // (only the narrow band is stored, but classification visits the box; 1e10
 // = a 107 mm cube at 50 um).
 inline constexpr double kMaxSculptGridVoxels = 1e10;
+// Fast winding number (Barill et al. 2018, SIGGRAPH): a cluster of triangles
+// is replaced by its dipole when the query point is farther than beta times
+// the cluster radius. beta = 2 is the paper's default; the first-order error
+// then stays far below the 0.5 inside/outside threshold (ADR 0018).
+inline constexpr double kWindingBeta = 2.0;
+// Imported models (M4): default target height of a 28-32 mm scale mini (mm).
+inline constexpr double kDefaultMiniHeightMm = 32.0;
 
 /// |a-b| <= max(abs, rel*max(|a|,|b|)) -- symmetric, unlike many isclose variants.
 inline bool close(double a, double b, double rel = kRelNumeric, double abs = kAbsNumericMm) {

@@ -42,3 +42,9 @@ def close(a: float, b: float, rel: float = REL_NUMERIC, abs_: float = ABS_NUMERI
 DEFAULT_VOXEL_MM: float = 0.05
 MIN_VOXEL_MM: float = 0.01
 MAX_SCULPT_GRID_VOXELS: float = 1e10
+
+# --- Ebene 4: Import (M4, ADR 0018) ---------------------------------------------
+# Fast Winding Number: Cluster als Dipol, wenn Abstand > beta * Clusterradius.
+WINDING_BETA: float = 2.0
+# Standard-Zielhöhe importierter Minis (mm).
+DEFAULT_MINI_HEIGHT_MM: float = 32.0
