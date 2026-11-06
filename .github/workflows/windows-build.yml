@@ -44,12 +44,15 @@ jobs:
         shell: pwsh
         run: |
           $env:QT_ROOT_DIR = "$env:QT_ROOT_DIR"
-          ./scripts/build-windows.ps1 -SkipTests
+          ./scripts/build-windows.ps1 -SkipTests -Python "$env:pythonLocation\python.exe"
       - name: Smoke test packaged CLI (isolated Python, no sockets)
         shell: pwsh
         run: |
           cd dist/ANVIL
+          # like on a user PC: no Python, Qt or build tools on PATH
+          $env:PATH = "C:\Windows\system32;C:\Windows"
           ./anvil-cli.exe --version
+          if ($LASTEXITCODE) { throw "anvil-cli does not start from the package alone (exit $LASTEXITCODE)" }
           ./anvil-cli.exe ../../examples/magnet_base.py
           ./anvil-cli.exe -c "from anvil import *; print(info(fillet(box(x=10*mm, y=10*mm, z=5*mm), 1*mm))['volume'])"
           ./anvil-cli.exe -c "import socket" ; if ($LASTEXITCODE -eq 0) { throw "socket must not be importable" } else { $global:LASTEXITCODE = 0 }

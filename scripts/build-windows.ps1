@@ -14,7 +14,7 @@
   powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
   powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1 -SkipTests
 #>
-param([switch]$SkipTests, [switch]$SkipPackage)
+param([switch]$SkipTests, [switch]$SkipPackage, [string]$Python = "")
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $envFile = Join-Path $root ".deps\env.json"
@@ -26,6 +26,11 @@ if (Test-Path $envFile) {
 } else {
   $pyExe = (Get-Command python).Source
 }
+if ($Python) { $pyExe = $Python }
+# ANVIL embeds exactly Python 3.11 (requirement); a different python.exe on PATH
+# would link one version and package another (python3XX.dll not found at start).
+$pyVer = & $pyExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+if ($pyVer -ne "3.11") { throw "Python 3.11 required, but '$pyExe' is $pyVer. Pass -Python <path to 3.11 python.exe>." }
 
 # Enter the VS developer environment (cl.exe, ninja) if not already there
 if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
@@ -95,6 +100,8 @@ try {
   Copy-Item (Join-Path $root "THIRD_PARTY.md") $dist
   Copy-Item (Join-Path $root "scripts\LIESMICH.txt") $dist
   # Fail the build if a runtime DLL is missing (what users would otherwise see as a start error)
+  # the DLL the executables import must be the one we ship
+  if (-not (Test-Path (Join-Path $dist "python311.dll"))) { throw "package incomplete: python311.dll missing" }
   foreach ($need in @("ANVIL.exe", "anvil-cli.exe", "python$ver.dll", "python$ver.zip", "vcruntime140.dll", "msvcp140.dll", "Qt6Quick.dll", "anvil-geom.exe", "TKernel.dll")) {
     if (-not (Test-Path (Join-Path $dist $need))) { throw "package incomplete: $need missing" }
   }
