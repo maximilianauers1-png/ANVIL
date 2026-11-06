@@ -219,6 +219,31 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     });
     add("screenshot deform", [this] { screenshot("10_deform"); });
 
+    // 15) Sculpt mode: make the part sculptable, one draw stroke = one sculpt(...) command
+    add("sculpt mode + make sculptable", [this] {
+        app_->requestScenery("none");
+        app_->setMode("Sculpt");
+        app_->setSelection({"Cylinder1"});
+        app_->requestView("top");
+    }, [this] { return idle() && item("makeSculptable") != nullptr; }, 10000);
+    add("click Make sculptable", [this] { clickItem("makeSculptable"); },
+        [this] { return idle() && app_->objectKind("Cylinder1") == "Sculpt" && view_->sculptReady("Cylinder1"); }, 60000);
+    add("draw stroke across the top", [this] {
+        vol_before_ = objectValue("Cylinder1", "volume");
+        QPointF a = project(-8, 6, 3), b = project(8, 6, 3);
+        mouseMove(a);
+        mousePress(a, Qt::LeftButton);
+        for (int i = 1; i <= 12; ++i) mouseMove(a + (b - a) * (i / 12.0), Qt::LeftButton);
+        mouseRelease(b, Qt::LeftButton);
+    }, [this] {
+        auto h = app_->history();
+        return idle() && !h.isEmpty() && h.back().toMap()["source"].toString().startsWith("sculpt(\"Cylinder1\", \"draw\"") &&
+               objectValue("Cylinder1", "volume") > vol_before_ + 0.1;
+    }, 60000);
+    add("iso view for sculpt", [this] { app_->requestView("iso"); }, [this] { return idle(); });
+    add("screenshot sculpt", [this] { screenshot("12_sculpt"); });
+    add("back to Design", [this] { app_->setMode("Design"); }, [this] { return !view_->sculptMode(); });
+
     // 14) Studio scenery: sunset, fjord, night (procedural environment pass)
     for (const char* sc : {"sunset", "fjord", "night"}) {
         const QString name = sc;

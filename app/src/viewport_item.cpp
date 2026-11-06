@@ -1,4 +1,5 @@
 #include "viewport_item.hpp"
+#include "sculpt_engine.hpp"
 
 #include <QFile>
 #include <QGuiApplication>
@@ -56,6 +57,24 @@ ViewportItem::ViewportItem(QQuickItem* parent) : QQuickItem(parent) {
     connect(t, &QTimer::timeout, this, &ViewportItem::statsChanged);
     t->start(1000);
     snap_engine_.settings.dpi_scale = 1.0;
+    // live sculpting: the engine thread posts results to the GUI thread
+    sculpt_engine_ = std::make_unique<SculptEngine>(
+        [this](const std::string& object, std::vector<SculptEngine::ChunkUpdate> ups, double ms) {
+            QMetaObject::invokeMethod(this, [this, object, ups = std::move(ups), ms] {
+                if (live_.object != object) return;
+                for (const auto& u : ups) live_.chunks[sdf_chunk_key(u.chunk)] = u.mesh;
+                sculpt_ms_ = ms;
+                emit brushChanged();
+                requestFrame();
+            }, Qt::QueuedConnection);
+        },
+        [this](const std::string& object, std::shared_ptr<const sdf::Grid> grid, sdf::Stroke stroke) {
+            QMetaObject::invokeMethod(this, [this, object, grid, stroke] {
+                live_.done = true;
+                pending_grid_ = grid;
+                if (stroke_done_) stroke_done_(QString::fromStdString(object), stroke_root_, grid, stroke);
+            }, Qt::QueuedConnection);
+        });
 }
 
 ViewportItem::~ViewportItem() = default;
@@ -129,7 +148,7 @@ void ViewportItem::sync() {
         int idx = 0;
         for (const auto& o : scene_->objects) {
             ++idx;
-            if (!o.visible || !o.gpu) continue;
+            if (!o.visible || (!o.gpu && o.parts.empty())) continue;
             DrawItem item;
             item.mesh = o.gpu;
             QColor c = object_colors_.isEmpty() ? QColor(180, 184, 190)
@@ -140,7 +159,24 @@ void ViewportItem::sync() {
             bool sel = selection_.contains(qn) || (tool_ == "pick" && picked_tools_.contains(qn));
             item.highlight = sel ? 1.f : 0.f;
             if (sel && tool_ == "move" && base_) item.extra_offset = snap_.point - *base_;
-            in.items.push_back(item);
+            if (o.gpu) {
+                in.items.push_back(item);
+                continue;
+            }
+            // sculpt parts; chunks of a running stroke replace their evaluated version
+            item.edges = false;
+            const LiveParts* live = live_.object == o.name ? &live_ : nullptr;
+            for (std::size_t i = 0; i < o.parts.size(); ++i) {
+                if (live && live->chunks.count(sdf_chunk_key(o.part_chunks[i]))) continue;
+                item.mesh = o.parts[i];
+                in.items.push_back(item);
+            }
+            if (live)
+                for (const auto& [k, m] : live->chunks)
+                    if (m) {
+                        item.mesh = m;
+                        in.items.push_back(item);
+                    }
         }
     }
     if (ghost_) {
@@ -212,6 +248,16 @@ void ViewportItem::geometryChange(const QRectF& n, const QRectF& o) {
 void ViewportItem::setScene(std::shared_ptr<const Scene> s) {
     bool first = !scene_ && s && !s->bounds.empty();
     scene_ = std::move(s);
+    // a finished stroke stays visible until its command's evaluation arrives
+    if (live_.done && scene_) {
+        bool committed = true;
+        for (const auto& o : scene_->objects)
+            if (o.name == live_.object && o.root == stroke_root_) committed = false;
+        if (committed) {
+            live_ = LiveParts{};
+            pending_grid_.reset();
+        }
+    }
     if (first) frameAll();
     snap_engine_.reset();
     requestFrame();
@@ -291,8 +337,11 @@ void ViewportItem::updateSnap(QPointF pos) {
         return;
     }
     SnapScene sc;
-    for (const auto& o : scene_->objects)
-        if (o.visible && o.snap) sc.objects.push_back(o.snap);
+    for (const auto& o : scene_->objects) {
+        if (!o.visible) continue;
+        if (o.snap) sc.objects.push_back(o.snap);
+        for (const auto& ps : o.part_snaps) sc.objects.push_back(ps);
+    }
     SnapQuery q;
     q.cam = cam_;
     q.cam.width = width() * dpr();
@@ -316,6 +365,10 @@ void ViewportItem::mousePressEvent(QMouseEvent* e) {
     press_pos_ = last_pos_ = e->position();
     drag_button_ = e->button();
     dragging_ = false;
+    if (e->button() == Qt::LeftButton && tool_ == "sculpt" && sculptPress(e)) {
+        e->accept();
+        return;
+    }
     if (e->button() == Qt::RightButton) {
         hover_pos_ = e->position();
         updateSnap(hover_pos_);
@@ -327,6 +380,10 @@ void ViewportItem::mousePressEvent(QMouseEvent* e) {
 
 void ViewportItem::mouseMoveEvent(QMouseEvent* e) {
     QPointF p = e->position();
+    if (sculpting_) {
+        sculptMove(p);
+        return;
+    }
     if (drag_button_ == Qt::RightButton && radial_.active()) {
         hover_pos_ = p;
         if (radial_.move(p.x(), p.y())) emit radialChanged();
@@ -347,6 +404,11 @@ void ViewportItem::mouseMoveEvent(QMouseEvent* e) {
 }
 
 void ViewportItem::mouseReleaseEvent(QMouseEvent* e) {
+    if (sculpting_ && e->button() == Qt::LeftButton) {
+        sculptRelease();
+        drag_button_ = Qt::NoButton;
+        return;
+    }
     if (e->button() == Qt::RightButton && radial_by_mouse_) {
         hover_pos_ = e->position();
         radial_by_mouse_ = false;
@@ -414,6 +476,7 @@ void ViewportItem::hoverMoveEvent(QHoverEvent* e) {
         return;
     }
     if (tool_ == "draw") drawMove(hover_pos_);
+    else if (tool_ == "sculpt") sculptHover(hover_pos_);
     else updateSnap(hover_pos_);
 }
 

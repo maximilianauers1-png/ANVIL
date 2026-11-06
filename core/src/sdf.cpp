@@ -462,6 +462,42 @@ std::vector<IVec3> chunks_of(const Grid& g) {
     return {s.begin(), s.end()};
 }
 
+// ------------------------------------------------------------------ ray casting
+std::optional<double> raycast(const Grid& g, const Vec3& o, const Vec3& d, double t_max) {
+    const Box3 b = g.bounds();
+    if (b.empty()) return std::nullopt;
+    // clip the ray to the bounds of the allocated bricks (slab test)
+    double t0 = 0, t1 = t_max;
+    for (int a = 0; a < 3; ++a) {
+        if (std::abs(d[a]) < 1e-300) {
+            if (o[a] < b.lo[a] || o[a] > b.hi[a]) return std::nullopt;
+            continue;
+        }
+        double ta = (b.lo[a] - o[a]) / d[a], tb = (b.hi[a] - o[a]) / d[a];
+        if (ta > tb) std::swap(ta, tb);
+        t0 = std::max(t0, ta), t1 = std::min(t1, tb);
+        if (t0 > t1) return std::nullopt;
+    }
+    const double h = g.h();
+    double t = t0, f = g.sample(o + d * t);
+    if (f < 0) return t;  // starts inside
+    for (int i = 0; i < 100000 && t <= t1; ++i) {
+        const double step = std::max(f, 0.5 * h);
+        const double tn = t + step;
+        const double fn = g.sample(o + d * tn);
+        if (fn < 0) {  // bracket [t, tn]: bisect
+            double a = t, c = tn;
+            for (int k = 0; k < 30; ++k) {
+                const double m = 0.5 * (a + c);
+                (g.sample(o + d * m) < 0 ? c : a) = m;
+            }
+            return 0.5 * (a + c);
+        }
+        t = tn, f = fn;
+    }
+    return std::nullopt;
+}
+
 // ------------------------------------------------------------------ brushes
 const char* brush_name(Brush b) {
     switch (b) {

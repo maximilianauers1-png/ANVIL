@@ -53,6 +53,7 @@ ApplicationWindow {
                     wireColor: Theme.wire
                     meshView: App.display === "mesh"
                     scenery: Theme.name === "studio" ? App.scenery : "none"
+                    sculptMode: App.mode === "Sculpt"
                     objectColors: Theme.objectColors
 
                     // Radial menu key (default Space): hold, flick, release.
@@ -85,6 +86,26 @@ ApplicationWindow {
                 }
                 SnapOverlay { anchors.fill: parent; view: viewport }
                 DrawOverlay { id: drawOverlay; anchors.fill: parent; view: viewport }
+                SculptPanel {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.margins: Theme.unit * 2
+                    view: viewport
+                    visible: viewport.sculptMode
+                }
+                // brush cursor
+                Rectangle {
+                    visible: viewport.sculptMode && viewport.brushTarget !== ""
+                    x: viewport.brushPos.x - width / 2
+                    y: viewport.brushPos.y - height / 2
+                    width: 2 * viewport.brushScreenRadius
+                    height: width
+                    radius: width / 2
+                    color: "transparent"
+                    border.width: 1.5
+                    border.color: viewport.sculptBrush === "carve" ? Theme.danger : Theme.accent
+                    Rectangle { anchors.centerIn: parent; width: 3; height: 3; radius: 1.5; color: parent.border.color }
+                }
                 SketchEditor { id: sketchEditor; anchors.fill: parent; view: viewport }
                 SketchBar {
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -172,6 +193,7 @@ ApplicationWindow {
             else if (tool === "import_step_dialog") fileDialogs.importStep()
             else if (tool === "export_step_dialog") fileDialogs.exportStep()
             else if (tool === "sketch_edit" && App.selection.length === 1) sketchEditor.open(App.selection[0])
+            else if (tool.startsWith("sculpt_brush:")) viewport.sculptBrush = tool.substring(13)
         }
     }
     FileDialogs { id: fileDialogs }

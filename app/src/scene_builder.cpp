@@ -62,6 +62,24 @@ std::shared_ptr<const MeshCpu> SceneBuilder::to_gpu(const std::shared_ptr<const 
     return g;
 }
 
+std::shared_ptr<const MeshCpu> SceneBuilder::chunk_to_gpu(const sdf::ChunkMesh& c, std::uint64_t key) {
+    auto g = std::make_shared<MeshCpu>();
+    g->key = key;
+    const Mesh& m = c.mesh;
+    Box3 b = m.bounds();
+    g->origin = b.empty() ? Vec3{} : b.center();
+    g->pos.resize(m.V.size() * 3);
+    for (std::size_t i = 0; i < m.V.size(); ++i) {
+        Vec3 p = m.V[i] - g->origin;
+        g->pos[3 * i] = float(p.x), g->pos[3 * i + 1] = float(p.y), g->pos[3 * i + 2] = float(p.z);
+    }
+    g->tris.resize(m.F.size() * 3);
+    for (std::size_t i = 0; i < m.F.size(); ++i)
+        for (int k = 0; k < 3; ++k) g->tris[3 * i + k] = m.F[i][k];
+    for (const auto& e : feature_edges(m, -1.0)) g->wire.push_back(e[0]), g->wire.push_back(e[1]);  // mesh view
+    return g;
+}
+
 std::shared_ptr<const MeshCpu> SceneBuilder::lines_to_gpu(const std::shared_ptr<const Mesh>& l) {
     auto it = gpu_cache_.find(l.get());
     if (it != gpu_cache_.end()) return it->second.second;
@@ -131,6 +149,36 @@ void SceneBuilder::loop() {
                     so.gpu = lines_to_gpu(sh->lines);
                     so.bounds = sh->lines->bounds();
                     so.manifold = true;
+                    if (o->visible) scene->bounds.add(so.bounds);
+                    scene->objects.push_back(std::move(so));
+                    continue;
+                }
+                so.root = o->root;
+                if (sh->grid) {  // sculpt: chunk parts
+                    so.grid = sh->grid;
+                    for (const auto& ch : sh->chunks) {
+                        const Mesh* key = &ch->mesh;
+                        alive[key] = true;
+                        auto gi = gpu_cache_.find(key);
+                        std::shared_ptr<const MeshCpu> gpu;
+                        if (gi != gpu_cache_.end()) {
+                            gpu = gi->second.second;
+                        } else {
+                            gpu = chunk_to_gpu(*ch, next_key_++);
+                            gpu_cache_[key] = {std::shared_ptr<const Mesh>(ch, &ch->mesh), gpu};
+                        }
+                        so.parts.push_back(gpu);
+                        so.part_chunks.push_back(ch->chunk);
+                        auto sc = snap_cache_.find(key);
+                        if (sc == snap_cache_.end() || sc->second->name != o->name)
+                            snap_cache_[key] = make_snap_object(o->name, std::shared_ptr<const Mesh>(ch, &ch->mesh), {});
+                        so.part_snaps.push_back(snap_cache_[key]);
+                    }
+                    so.bounds = sh->mesh->bounds();
+                    so.triangles = sh->mesh->F.size();
+                    so.volume = sh->mesh->signed_volume();
+                    so.manifold = !sh->mesh->F.empty();
+                    so.error = sh->error;
                     if (o->visible) scene->bounds.add(so.bounds);
                     scene->objects.push_back(std::move(so));
                     continue;

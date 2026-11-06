@@ -166,10 +166,29 @@ void AppController::attachViewport(ViewportItem* v) {
     });
     connect(v, &ViewportItem::picked, this, &AppController::pick);
     v->setContextResolver([this](const QString& c) {
-        if (c == "selection" && selection_.size() == 1 && objectKind(selection_.front()) == "Sketch") return QString("sketch");
+        if (mode_ == "Design" && c == "selection" && selection_.size() == 1 && objectKind(selection_.front()) == "Sketch")
+            return QString("sketch");
         return c;
     });
     connect(v, &ViewportItem::sketchDrawn, this, &AppController::onSketchDrawn);
+    // a finished live stroke becomes one sculpt(...) command; its grid is
+    // registered first, so the evaluation reuses it instead of re-sculpting
+    v->setStrokeDone([this](const QString& object, NodePtr root, std::shared_ptr<const sdf::Grid> grid, sdf::Stroke st) {
+        if (!root || root->kind != NodeKind::Sculpt || st.path.empty()) return;
+        auto strokes = root->sculpt->strokes;
+        strokes.push_back(st);
+        auto doc = session_->document().state();
+        try {
+            seed_sculpt_cache(make_sculpt(root->inputs[0], root->sculpt->voxel, strokes), doc->resolver(),
+                              doc->eval_settings(settings_.chord_mm), grid);
+        } catch (const std::exception&) {
+        }
+        QStringList pts;
+        for (const auto& p : st.path) pts << "(" + reprDouble(p.x) + ", " + reprDouble(p.y) + ", " + reprDouble(p.z) + ")";
+        execute("sculpt(" + pyStr(object) + ", " + pyStr(sdf::brush_name(st.brush)) + ", [" + pts.join(", ") +
+                    "], radius=" + reprDouble(st.radius) + "*mm, strength=" + reprDouble(st.strength) + ")",
+                "ui");
+    });
     connect(v, &ViewportItem::toolsPicked, this, &AppController::onToolsPicked);
     connect(v, &ViewportItem::objectDoubleClicked, this, [this](const QString& name) {
         setSelection({name});

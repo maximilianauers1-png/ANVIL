@@ -193,6 +193,12 @@ int circle_segments(double radius_mm, double chord_mm);
 std::shared_ptr<const Shape> evaluate(const NodePtr& n, const VariableResolver& vars, const EvalSettings& s,
                                       ShapeCache* cache = nullptr);
 
+/// Registers the grid of a Sculpt node computed elsewhere (the live stroke in
+/// the viewport applies the same StrokeApplier steps, so the result is
+/// bit-identical): evaluating the node then skips the stroke.
+void seed_sculpt_cache(const NodePtr& sculpt_node, const VariableResolver& vars, const EvalSettings& s,
+                       std::shared_ptr<const sdf::Grid> grid);
+
 /// The mesh an STL export writes (float32 positions). Validate it with
 /// abs_tol_mm = float_tolerance(): sub-ulp slivers of boolean results only
 /// touch, and rounding must not make them read as crossings.

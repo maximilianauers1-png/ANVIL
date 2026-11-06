@@ -8,8 +8,10 @@
 #include <QVariantList>
 #include <QVector3D>
 
+#include <functional>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include "anvil/radial.hpp"
@@ -28,6 +30,15 @@ class ViewportItem : public QQuickItem {
     Q_PROPERTY(bool showGrid MEMBER show_grid_ NOTIFY styleChanged)
     Q_PROPERTY(QColor wireColor MEMBER wire_ NOTIFY styleChanged)
     Q_PROPERTY(bool meshView MEMBER mesh_view_ NOTIFY styleChanged)
+    // sculpting (M3)
+    Q_PROPERTY(bool sculptMode READ sculptMode WRITE setSculptMode NOTIFY toolChanged)
+    Q_PROPERTY(QString sculptBrush MEMBER sculpt_brush_ NOTIFY sculptChanged)
+    Q_PROPERTY(double sculptRadius MEMBER sculpt_radius_ NOTIFY sculptChanged)
+    Q_PROPERTY(double sculptStrength MEMBER sculpt_strength_ NOTIFY sculptChanged)
+    Q_PROPERTY(QPointF brushPos READ brushPos NOTIFY brushChanged)
+    Q_PROPERTY(double brushScreenRadius READ brushScreenRadius NOTIFY brushChanged)
+    Q_PROPERTY(QString brushTarget READ brushTarget NOTIFY brushChanged)
+    Q_PROPERTY(double sculptUpdateMs READ sculptUpdateMs NOTIFY brushChanged)
     Q_PROPERTY(QString scenery MEMBER scenery_ NOTIFY styleChanged)
     Q_PROPERTY(QStringList selection READ selection WRITE setSelection NOTIFY selectionChanged)
     // snapping (read by the QML overlay)
@@ -142,6 +153,18 @@ class ViewportItem : public QQuickItem {
     Q_INVOKABLE QVector3D cubeDirection(double u, double v) const;
     Q_INVOKABLE void frameAll();
     Q_INVOKABLE void startMoveTool();
+    bool sculptMode() const { return tool_ == "sculpt"; }
+    /// The evaluated scene has the object's sculpt grid (conversion finished).
+    Q_INVOKABLE bool sculptReady(const QString& name) const;
+    void setSculptMode(bool on);
+    QPointF brushPos() const { return brush_pos_; }
+    double brushScreenRadius() const { return brush_px_; }
+    QString brushTarget() const { return brush_target_; }
+    double sculptUpdateMs() const { return sculpt_ms_; }
+    /// Called (GUI thread) when a live stroke is complete: object, its root at
+    /// stroke start, the resulting grid and the stroke.
+    using StrokeDone = std::function<void(const QString&, NodePtr, std::shared_ptr<const sdf::Grid>, sdf::Stroke)>;
+    void setStrokeDone(StrokeDone f) { stroke_done_ = std::move(f); }
     Q_INVOKABLE void startDraw(const QString& kind);   // "polyline" | "rect" | "circle"
     Q_INVOKABLE void drawTypedLength(double mm);       // next point at this distance along the cursor direction
     Q_INVOKABLE void drawUndoPoint();
@@ -169,6 +192,8 @@ class ViewportItem : public QQuickItem {
     void toolChanged();
     void cameraChanged();
     void radialChanged();
+    void sculptChanged();
+    void brushChanged();
     void statsChanged();
     /// The user picked something (empty name = clicked empty space).
     void picked(const QString& name, bool additive);
@@ -252,6 +277,34 @@ class ViewportItem : public QQuickItem {
     RadialGesture radial_;
     RadialRingProvider radial_rings_;
     std::function<QString(const QString&)> context_resolver_;
+    // sculpting
+    QString sculpt_brush_ = "draw";
+    double sculpt_radius_ = 2.0, sculpt_strength_ = 0.5;
+    QPointF brush_pos_{-1e6, -1e6};
+    double brush_px_ = 0, sculpt_ms_ = 0;
+    QString brush_target_;
+    bool sculpting_ = false;
+    double stroke_t_ = 0;                 // ray depth of the last stroke point
+    Vec3 grab_plane_p_, grab_plane_n_;
+    std::unique_ptr<class SculptEngine> sculpt_engine_;
+    StrokeDone stroke_done_;
+    NodePtr stroke_root_;                 // object root when the stroke began
+    std::shared_ptr<const sdf::Grid> pending_grid_;  // finished stroke, until the scene catches up
+    const SceneObject* sculpt_object_at(QPointF pos, double* t_hit, Vec3* p_hit) const;
+    std::shared_ptr<const sdf::Grid> sculpt_grid_of(const SceneObject& o) const;
+    bool sculptPress(QMouseEvent* e);
+    bool sculptMove(QPointF pos);
+    void sculptRelease();
+    void sculptHover(QPointF pos);
+    // live sculpt stroke: replacement meshes per chunk of one object
+    struct LiveParts {
+        std::string object;
+        std::unordered_map<std::uint64_t, std::shared_ptr<const MeshCpu>> chunks;
+        bool done = false;
+    } live_;
+    static std::uint64_t sdf_chunk_key(const sdf::IVec3& c) {
+        return (std::uint64_t(std::uint32_t(c.x)) << 42) ^ (std::uint64_t(std::uint32_t(c.y)) << 21) ^ std::uint32_t(c.z);
+    }
     bool pick_single_ = false;
     QString radial_context_;
     QVector3D radial_point_;

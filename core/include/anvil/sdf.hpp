@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
@@ -126,6 +127,12 @@ std::vector<IVec3> chunks_of(const Grid& g);
 inline IVec3 chunk_of_brick(const IVec3& b) {
     return {floor_div(b.x, kChunkBricks), floor_div(b.y, kChunkBricks), floor_div(b.z, kChunkBricks)};
 }
+
+/// First zero crossing along origin + t dir (dir unit), t in [0, t_max]:
+/// sphere tracing (Hart 1996) with steps max(|f|, h/2) -- f is a distance
+/// (1-Lipschitz) inside the band and >= kBand h outside -- then bisection of
+/// the bracketing step. nullopt if the ray misses.
+std::optional<double> raycast(const Grid& g, const Vec3& origin, const Vec3& dir, double t_max);
 
 // --- sculpting ------------------------------------------------------------
 enum class Brush { Draw, Carve, Smooth, Grab, Flatten };

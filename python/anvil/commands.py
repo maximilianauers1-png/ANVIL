@@ -300,6 +300,22 @@ def _(ctx):
     return None
 
 
+# --- sculpting (M3): brushes are UI state; strokes become sculpt(...) commands ---
+for _b, _label, _help in (("draw", "Draw", "Build up material (Ctrl: carve)"),
+                          ("carve", "Carve", "Remove material (Ctrl: draw)"),
+                          ("smooth", "Smooth", "Relax the surface (also: hold Shift)"),
+                          ("grab", "Grab", "Pull the surface along with the pointer"),
+                          ("flatten", "Flatten", "Plane off towards the first touched point")):
+    registry.add(Command(id=f"sculpt.{_b}", label=_label, category="Sculpt", help=_help, build=lambda ctx: None,
+                         ui=f"sculpt_brush:{_b}", keywords="brush sculpt clay"))
+
+
+@command("sculpt.make", "Make sculptable", "Sculpt", "Convert the selected object into sculptable clay (voxel 0.05 mm)",
+         min_selection=1, max_selection=1, keywords="voxel clay convert remesh")
+def _(ctx):
+    return f"sculptable({_single(ctx)})"
+
+
 # Radial layout: slot index = sector (0 = east, counter-clockwise in 45 degree steps).
 # Positions are stable across contexts: inapplicable commands are greyed out,
 # never removed or reordered (muscle memory).
@@ -318,5 +334,12 @@ registry.radial = {
                       "file.export_stl", _VIEW],
         "sketch": ["sketch.extrude", "sketch.solidify", "sketch.cut", "sketch.revolve", "edit.delete",
                    "sketch.edit", "draw.polyline", _VIEW],
+    },
+    # Sculpt mode: brushes always in the same places, with or without selection
+    "Sculpt": {
+        "empty": ["sculpt.draw", "sculpt.carve", "sculpt.smooth", "sculpt.grab", "sculpt.flatten", "",
+                  "file.export_stl", _VIEW],
+        "selection": ["sculpt.draw", "sculpt.carve", "sculpt.smooth", "sculpt.grab", "sculpt.flatten",
+                      "sculpt.make", "file.export_stl", _VIEW],
     },
 }

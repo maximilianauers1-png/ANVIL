@@ -1013,6 +1013,13 @@ std::shared_ptr<const Shape> evaluate(const NodePtr& n, const VariableResolver& 
     return ev.eval(n);
 }
 
+void seed_sculpt_cache(const NodePtr& n, const VariableResolver& vars, const EvalSettings& s,
+                       std::shared_ptr<const sdf::Grid> grid) {
+    if (!n || n->kind != NodeKind::Sculpt || !grid) return;
+    Evaluator ev{vars, s, nullptr};
+    sculpt_grid_cache().put(ev.sculpt_prefix_key(n, n->sculpt->strokes.size()), std::move(grid));
+}
+
 Mesh export_mesh(const Shape& s) { return s.mesh->rounded_to_float(); }
 
 AnalyticFeatures analytic_features(const NodePtr& root, const VariableResolver& vars) {

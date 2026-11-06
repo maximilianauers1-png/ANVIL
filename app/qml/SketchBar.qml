@@ -7,7 +7,7 @@ import Anvil.Native
 Rectangle {
     id: root
     property var view
-    property string sketch: App.selection.length === 1 && App.objectKind(App.selection[0]) === "Sketch" ? App.selection[0] : ""
+    property string sketch: App.selection.length === 1 && App.objects.some(function (o) { return o.name === App.selection[0] && o.kind === "Sketch" }) ? App.selection[0] : ""
     signal editRequested(string name)
     visible: sketch !== "" && view.tool === "select"
     radius: Theme.radius

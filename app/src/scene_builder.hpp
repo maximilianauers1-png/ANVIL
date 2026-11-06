@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "anvil/document.hpp"
+#include "anvil/sdf.hpp"
 #include "anvil/snap.hpp"
 #include "vk/renderer.hpp"
 
@@ -28,6 +29,13 @@ struct SceneObject {
     double volume = 0;
     bool manifold = true;
     std::string error;
+    // Sculpt objects: one GPU part per chunk (only changed chunks are rebuilt
+    // and uploaded), with their own snap objects; no feature-edge overlay.
+    std::vector<std::shared_ptr<const MeshCpu>> parts;
+    std::vector<sdf::IVec3> part_chunks;
+    std::vector<std::shared_ptr<const SnapObject>> part_snaps;
+    std::shared_ptr<const sdf::Grid> grid;
+    NodePtr root;
 };
 
 struct Scene {
@@ -52,6 +60,12 @@ class SceneBuilder {
     void loop();
     std::shared_ptr<const MeshCpu> to_gpu(const std::shared_ptr<const Mesh>& m);
     std::shared_ptr<const MeshCpu> lines_to_gpu(const std::shared_ptr<const Mesh>& lines);
+
+  public:
+    /// GPU copy of a chunk mesh (no feature edges: chunk borders are open).
+    static std::shared_ptr<const MeshCpu> chunk_to_gpu(const sdf::ChunkMesh& c, std::uint64_t key);
+
+  private:
 
     ShapeCache& cache_;
     Ready on_ready_;
