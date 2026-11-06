@@ -83,3 +83,15 @@ LGPL-Komponenten (Qt, OCCT) werden dynamisch gelinkt und unverändert
 ausgeliefert; Lizenztexte liegen im Installer unter `licenses/`. Apache-2.0-
 `NOTICE`-Dateien werden mitkopiert. `tools/license-audit` (M7) vergleicht diese
 Tabelle mit den tatsächlich installierten Paketen.
+
+## Lokale KI (M6, ADR 0019) – nicht mitgeliefert, vom Nutzer installiert
+
+| Komponente | Version | Lizenz | Quelle | Verwendung |
+|---|---|---|---|---|
+| Ollama | ≥ 0.5 (getestet gegen die HTTP-API `/api/version`, `/api/tags`, `/api/pull`, `/api/chat`, `/api/delete`) | MIT | ollama.com | separater lokaler Server auf 127.0.0.1:11434; ANVIL startet ihn nicht |
+| Qwen2.5 7B Instruct (`qwen2.5:7b`) | Ollama-Tag, Q4_K_M | Apache-2.0 | ollama.com/library/qwen2.5 | Standardmodell des Assistenten |
+| Qwen3 8B (`qwen3:8b`) | Ollama-Tag, Q4_K_M | Apache-2.0 | ollama.com/library/qwen3 | optional |
+| Qwen2.5 3B Instruct (`qwen2.5:3b`) | Ollama-Tag, Q4_K_M | Qwen Research License (nicht kommerziell) | ollama.com/library/qwen2.5 | optional, schwache GPUs |
+
+`anvil-ai` (eigener Code, keine Netzwerkbibliothek) ist das einzige ANVIL-Programm mit Sockets und
+verbindet sich ausschließlich mit Loopback-Adressen.

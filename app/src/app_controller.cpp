@@ -3,6 +3,8 @@
 #include <QDateTime>
 #include <QDirIterator>
 #include <QFile>
+#include <QJsonArray>
+#include <QProcess>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -507,6 +509,154 @@ void AppController::setSelection(const QStringList& s) {
     selection_ = s;
     if (viewport_) viewport_->setSelection(s);
     emit selectionChanged();
+}
+
+// ------------------------------------------------------------------ local AI assistant
+// The app never opens a socket: anvil-ai (next to this executable) talks to the
+// local Ollama server on 127.0.0.1 and to us over JSON lines (ADR 0001, 0010, 0019).
+void AppController::aiEnsureWorker() {
+    if (ai_proc_ && ai_proc_->state() != QProcess::NotRunning) return;
+    if (!ai_proc_) {
+        ai_proc_ = new QProcess(this);
+        ai_proc_->setProcessChannelMode(QProcess::SeparateChannels);
+        connect(ai_proc_, &QProcess::readyReadStandardOutput, this, &AppController::aiReadLines);
+        connect(ai_proc_, &QProcess::finished, this, [this](int, QProcess::ExitStatus) {
+            // fail every waiting request (the worker was stopped or crashed)
+            auto hs = std::move(ai_handlers_);
+            ai_handlers_.clear();
+            for (auto& [id, h] : hs) h(QJsonObject{{"event", "error"}, {"message", "the AI worker stopped"}});
+        });
+    }
+#ifdef _WIN32
+    const QString exe = QCoreApplication::applicationDirPath() + "/anvil-ai.exe";
+#else
+    const QString exe = QCoreApplication::applicationDirPath() + "/anvil-ai";
+#endif
+    ai_proc_->start(exe, {});
+    if (!ai_proc_->waitForStarted(5000)) {
+        ai_status_ = QVariantMap{{"running", false}, {"message", "anvil-ai could not be started (" + exe + ")"}};
+        emit aiChanged();
+    }
+}
+
+void AppController::aiReadLines() {
+    ai_buf_ += ai_proc_->readAllStandardOutput();
+    for (int nl; (nl = int(ai_buf_.indexOf('\n'))) >= 0;) {
+        const QByteArray line = ai_buf_.left(nl);
+        ai_buf_.remove(0, nl + 1);
+        const QJsonObject o = QJsonDocument::fromJson(line).object();
+        const int id = o["id"].toInt();
+        auto it = ai_handlers_.find(id);
+        if (it == ai_handlers_.end()) continue;
+        auto h = it->second;
+        if (o["event"].toString() != "progress") {
+            ai_handlers_.erase(it);
+            --ai_pending_;
+        }
+        h(o);
+        emit aiChanged();
+    }
+}
+
+void AppController::aiSend(QJsonObject req, std::function<void(const QJsonObject&)> on_event) {
+    aiEnsureWorker();
+    const int id = ai_next_id_++;
+    req["id"] = id;
+    ai_handlers_[id] = std::move(on_event);
+    ++ai_pending_;
+    ai_proc_->write(QJsonDocument(req).toJson(QJsonDocument::Compact) + "\n");
+    emit aiChanged();
+}
+
+QVariantList AppController::aiModels() const {
+    ExecResult r = session_->run(R"({"q": "ai_models"})", "ui", ExecMode::Query);
+    if (!r.ok) return {};
+    return QJsonDocument::fromJson(QByteArray::fromStdString(r.json)).object()["models"].toArray().toVariantList();
+}
+
+void AppController::aiRefresh() {
+    aiSend(QJsonObject{{"op", "status"}}, [this](const QJsonObject& o) {
+        ai_status_ = o.toVariantMap();
+        // the chosen model must be installed; otherwise take the first installed one
+        QStringList names;
+        for (const auto& m : o["models"].toArray()) names << m.toObject()["name"].toString();
+        if (!names.isEmpty() && !names.contains(settings_.ai_model)) {
+            bool found = false;
+            for (const auto& n : names)
+                if (n.startsWith(settings_.ai_model + ":") || settings_.ai_model.startsWith(n)) found = true;
+            if (!found) setAiModel(names.front());
+        }
+    });
+}
+
+void AppController::aiAsk(const QString& text) {
+    if (text.trimmed().isEmpty()) return;
+    QJsonObject q{{"q", "ai_request"}, {"text", text}, {"model", settings_.ai_model},
+                  {"selection", QJsonArray::fromStringList(selection_)}};
+    ExecResult r = session_->run(QJsonDocument(q).toJson(QJsonDocument::Compact).toStdString(), "ui", ExecMode::Query);
+    if (!r.ok) {
+        ai_proposal_ = QVariantMap{{"prompt", text}, {"errors", QStringList{QString::fromStdString(r.error)}}};
+        emit aiChanged();
+        return;
+    }
+    ai_proposal_ = QVariantMap{{"prompt", text}, {"pending", true}};
+    ai_activity_ = "Thinking… (" + settings_.ai_model + ")";
+    QJsonObject req{{"op", "chat"}, {"request", QJsonDocument::fromJson(QByteArray::fromStdString(r.json)).object()}};
+    aiSend(req, [this, text](const QJsonObject& o) {
+        ai_activity_.clear();
+        if (o["event"].toString() == "error") {
+            ai_proposal_ = QVariantMap{{"prompt", text}, {"errors", QStringList{o["message"].toString()}}};
+            return;
+        }
+        QJsonObject m{{"q", "ai_map"}, {"response", o["response"].toObject()}};
+        ExecResult mr = session_->run(QJsonDocument(m).toJson(QJsonDocument::Compact).toStdString(), "ui", ExecMode::Query);
+        QVariantMap p = mr.ok ? QJsonDocument::fromJson(QByteArray::fromStdString(mr.json)).object().toVariantMap()
+                              : QVariantMap{{"errors", QStringList{QString::fromStdString(mr.error)}}};
+        p["prompt"] = text;
+        ai_proposal_ = p;
+    });
+}
+
+void AppController::aiApply() {
+    const QString src = ai_proposal_.value("python").toString();
+    ai_proposal_.clear();
+    emit aiChanged();
+    if (!src.isEmpty()) execute(src, "ai");  // one command, one undo step; the journal records it
+}
+
+void AppController::aiDiscard() {
+    ai_proposal_.clear();
+    emit aiChanged();
+}
+
+void AppController::aiPull(const QString& model) {
+    ai_progress_ = 0;
+    ai_activity_ = "Downloading " + model + " …";
+    aiSend(QJsonObject{{"op", "pull"}, {"model", model}}, [this, model](const QJsonObject& o) {
+        const QString ev = o["event"].toString();
+        if (ev == "progress") {
+            const double total = o["total"].toDouble(), done = o["completed"].toDouble();
+            if (total > 0) ai_progress_ = done / total;
+            ai_activity_ = "Downloading " + model + ": " + o["status"].toString() +
+                           (total > 0 ? QString(" %1 %").arg(int(100 * done / total)) : QString());
+            return;
+        }
+        ai_progress_ = -1;
+        ai_activity_ = ev == "error" ? o["message"].toString() : model + " installed";
+        if (ev != "error") setAiModel(model);
+        aiRefresh();
+    });
+}
+
+void AppController::aiDelete(const QString& model) {
+    aiSend(QJsonObject{{"op", "delete"}, {"model", model}}, [this](const QJsonObject&) { aiRefresh(); });
+}
+
+void AppController::aiCancel() {
+    if (ai_proc_) ai_proc_->kill();
+    ai_activity_ = "Stopped";
+    ai_progress_ = -1;
+    emit aiChanged();
 }
 
 void AppController::setMode(const QString& m) {

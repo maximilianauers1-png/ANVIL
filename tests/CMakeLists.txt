@@ -70,3 +70,10 @@ add_test(NAME acceptance_cut
          COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/cut_suite.py)
 set_tests_properties(acceptance_cut PROPERTIES PASS_REGULAR_EXPRESSION "CUT SUITE OK" TIMEOUT 600
                      ENVIRONMENT "ANVIL_TEST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/acceptance")
+
+# Local AI: worker protocol (stand-in Ollama server) and the assistant's tool mapping
+add_test(NAME ai_worker COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/ai/test_worker.py $<TARGET_FILE:anvil-ai>)
+set_tests_properties(ai_worker PROPERTIES PASS_REGULAR_EXPRESSION "AI WORKER OK" TIMEOUT 120)
+add_test(NAME ai_assistant COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/ai/assistant_suite.py)
+set_tests_properties(ai_assistant PROPERTIES PASS_REGULAR_EXPRESSION "ASSISTANT OK" TIMEOUT 300
+                     ENVIRONMENT "ANVIL_TEST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/acceptance")

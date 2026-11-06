@@ -23,3 +23,4 @@ Format: Kontext · Entscheidung · Alternativen · Messung. Eine Entscheidung
 | [0016](0016-m2-skizzen-worker-bedienung.md) | M2: Skizzen-Solver, B-Rep-Worker, gemischte Auswertung, Zeichenbedienung | – |
 | [0017](0017-m3-sculpting.md) | M3: Sculpting auf Sparse-Brick-SDFs, Abweichungen mit Messwerten | –  |
 | [0018](0018-m4-import-pose-merge.md) | M4 neu: importierte Minis (GLB/OBJ) posen, bewaffnen, verschmelzen; robuste Voxelisierung | Benchmark M4 |
+| [0019](0019-lokale-ki-assistent.md) | Lokaler KI-Assistent (Qwen über Ollama, typisierte Werkzeuge), verzerrungsfreies Posen | Tests ai_worker/ai_assistant |

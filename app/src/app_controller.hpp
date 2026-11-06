@@ -1,6 +1,10 @@
 // Bridge between QML and the session (command bus). Every UI action ends up
 // as Python source submitted here (requirement 2.5).
 #pragma once
+#include <QProcess>
+#include <QJsonObject>
+#include <functional>
+#include <map>
 #include <QDir>
 #include <QHash>
 #include <QElapsedTimer>
@@ -38,6 +42,14 @@ class AppController : public QObject {
     Q_PROPERTY(QString mode READ mode WRITE setMode NOTIFY modeChanged)
     Q_PROPERTY(QString display READ display NOTIFY displayChanged)
     Q_PROPERTY(bool snap READ snap WRITE setSnap NOTIFY snapSettingChanged)
+    // local AI assistant (anvil-ai worker -> Ollama on 127.0.0.1)
+    Q_PROPERTY(QVariantMap aiStatus READ aiStatus NOTIFY aiChanged)          // running, version, models, message
+    Q_PROPERTY(QVariantList aiModels READ aiModels CONSTANT)                 // recommended models (installer)
+    Q_PROPERTY(QString aiModel READ aiModel WRITE setAiModel NOTIFY aiChanged)
+    Q_PROPERTY(bool aiBusy READ aiBusy NOTIFY aiChanged)
+    Q_PROPERTY(QString aiActivity READ aiActivity NOTIFY aiChanged)          // "Thinking…", "Downloading … 42 %"
+    Q_PROPERTY(double aiProgress READ aiProgress NOTIFY aiChanged)           // download 0..1 (-1: none)
+    Q_PROPERTY(QVariantMap aiProposal READ aiProposal NOTIFY aiChanged)      // prompt, summary, python, answer, errors
     Q_PROPERTY(QString scenery READ scenery NOTIFY sceneryChanged)
     Q_PROPERTY(QString consoleText READ consoleText NOTIFY consoleChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
@@ -157,6 +169,26 @@ class AppController : public QObject {
     Q_INVOKABLE double parseLength(const QString& text) const;
     Q_INVOKABLE QString objectKind(const QString& name) const;
     bool snap() const { return settings_.snap; }
+    QVariantMap aiStatus() const { return ai_status_; }
+    QVariantList aiModels() const;
+    QString aiModel() const { return settings_.ai_model; }
+    void setAiModel(const QString& m) {
+        if (m == settings_.ai_model) return;
+        settings_.ai_model = m;
+        settings_.save();
+        emit aiChanged();
+    }
+    bool aiBusy() const { return ai_pending_ != 0; }
+    QString aiActivity() const { return ai_activity_; }
+    double aiProgress() const { return ai_progress_; }
+    QVariantMap aiProposal() const { return ai_proposal_; }
+    Q_INVOKABLE void aiRefresh();                       // server status + installed models
+    Q_INVOKABLE void aiAsk(const QString& text);        // natural language -> proposal
+    Q_INVOKABLE void aiApply();                         // run the proposed Python (one undo step)
+    Q_INVOKABLE void aiDiscard();
+    Q_INVOKABLE void aiPull(const QString& model);      // installer: Ollama downloads the model
+    Q_INVOKABLE void aiDelete(const QString& model);
+    Q_INVOKABLE void aiCancel();                        // stops the worker (and a running download)
     void setSnap(bool on) {
         if (on == settings_.snap) return;
         settings_.snap = on;
@@ -175,6 +207,7 @@ class AppController : public QObject {
     Q_INVOKABLE double sculptVoxel(const QString& name) const;  // part the sketch was drawn on ("" = unknown)
 
   signals:
+    void aiChanged();
     void snapSettingChanged();
     void memoryChanged();
     void documentChanged();
@@ -199,6 +232,18 @@ class AppController : public QObject {
     void previewError(const QString& error);
 
   private:
+    // AI worker
+    QProcess* ai_proc_ = nullptr;
+    QByteArray ai_buf_;
+    int ai_next_id_ = 1;
+    int ai_pending_ = 0;
+    std::map<int, std::function<void(const QJsonObject&)>> ai_handlers_;
+    QVariantMap ai_status_, ai_proposal_;
+    QString ai_activity_;
+    double ai_progress_ = -1;
+    void aiSend(QJsonObject req, std::function<void(const QJsonObject&)> on_event);
+    void aiEnsureWorker();
+    void aiReadLines();
     QString uniqueName(const QString& base) const;
     Dim paramDim(const QString& name, const QString& path, const QString& key) const;
     void onSketchDrawn(const QString& kind, const QString& plane, double offset, const QVariantList& pts, bool closed,

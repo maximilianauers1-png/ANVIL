@@ -28,6 +28,7 @@ include(cmake/Warnings.cmake)
 
 add_subdirectory(core)
 add_subdirectory(python)
+add_subdirectory(workers/ai)
 if(ANVIL_BUILD_GEOM)
   add_subdirectory(workers/geom)
 endif()

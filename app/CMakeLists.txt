@@ -15,7 +15,7 @@ set(ANVIL_QML_FILES
   qml/ViewCube.qml qml/AxisTriad.qml qml/PropertiesPanel.qml qml/BottomPanel.qml
   qml/StatusBar.qml qml/ExportDialog.qml qml/RecoveryDialog.qml qml/FileDialogs.qml
   qml/RadialEditor.qml qml/DrawOverlay.qml qml/SketchEditor.qml qml/SketchBar.qml qml/SculptPanel.qml qml/MiniPanel.qml qml/SliderField.qml
-  qml/CutOverlay.qml qml/ToolBox.qml qml/ToolIcons.qml)
+  qml/CutOverlay.qml qml/ToolBox.qml qml/ToolIcons.qml qml/AiPanel.qml qml/AssistantPanel.qml)
 set_source_files_properties(qml/Theme.qml qml/ToolIcons.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 # Place the files at the module root (qrc:/qt/qml/Anvil/X.qml) so the implicit
 # directory import is the module itself (needed for the Theme singleton).

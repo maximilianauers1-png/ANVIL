@@ -13,6 +13,7 @@ struct Settings {
     QString unit = "mm";
     QString radial_key = "Space";
     bool snap = true;                 // snapping in move / draw tools
+    QString ai_model = "qwen2.5:7b";  // local assistant model (Ollama tag)
     double chord_mm = 0.01;           // viewport + export default (tol::kDefaultChordMm)
     int autosave_seconds = 60;
     int undo_limit = 1000;

@@ -31,7 +31,7 @@ Rectangle {
         Repeater {
             model: [
                 { name: "Design", ms: "" }, { name: "Sculpt", ms: "" }, { name: "Mini", ms: "" },
-                { name: "Lab", ms: "M5" }, { name: "Print", ms: "M5" }, { name: "AI", ms: "M6" }
+                { name: "AI", ms: "" }, { name: "Lab", ms: "later" }, { name: "Print", ms: "later" }
             ]
             delegate: AButton {
                 objectName: "mode_" + modelData.name
@@ -39,7 +39,7 @@ Rectangle {
                 checkable: true
                 checked: App.mode === modelData.name
                 enabled: modelData.ms === ""
-                tip: modelData.ms === "" ? "" : modelData.name + " mode arrives with milestone " + modelData.ms
+                tip: modelData.ms === "" ? "" : modelData.name + " mode comes later"
                 onClicked: App.mode = modelData.name
             }
         }

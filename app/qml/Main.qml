@@ -101,6 +101,19 @@ ApplicationWindow {
                     anchors.margins: Theme.unit
                     view: viewport
                 }
+                AiPanel {
+                    anchors.left: toolBox.right
+                    anchors.top: parent.top
+                    anchors.margins: Theme.unit
+                    visible: App.mode === "AI"
+                }
+                AssistantPanel {
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.rightMargin: Theme.unit
+                    anchors.bottomMargin: Theme.unit * 6   // above the snap toggle
+                    width: Math.min(560, parent.width - 460)
+                }
                 MiniPanel {
                     anchors.left: toolBox.right
                     anchors.top: parent.top

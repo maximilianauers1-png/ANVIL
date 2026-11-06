@@ -30,6 +30,7 @@ Settings Settings::load() {
     if (v > kSettingsFormat) return s;  // written by a newer ANVIL: keep defaults, do not overwrite blindly
     s.theme = o.value("theme").toString(s.theme);
     s.snap = o.value("snap").toBool(s.snap);
+    s.ai_model = o.value("ai_model").toString(s.ai_model);
     s.unit = o.value("unit").toString(s.unit);
     s.display = o.value("display").toString(s.display);
     s.scenery = o.value("scenery").toString(s.scenery);
@@ -48,6 +49,7 @@ void Settings::save() const {
     o["version"] = kSettingsFormat;
     o["theme"] = theme;
     o["snap"] = snap;
+    o["ai_model"] = ai_model;
     o["unit"] = unit;
     o["display"] = display;
     o["scenery"] = scenery;

@@ -24,7 +24,7 @@ from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 __all__ = [
     "figure", "mini_base", "pose", "on_base", "unique_name",
     "import_model", "model_file", "model_info", "pose_distortion", "model_options", "weapon", "attach", "equip", "merge", "WEAPONS",
-    "cut", "knife", "lasso_cut", "drill", "slice_cut", "free_memory",
+    "cut", "knife", "lasso_cut", "drill", "slice_cut", "free_memory", "magnet_hole", "rotate",
     "tube", "prism", "pyramid", "capsule", "rounded_box", "wedge", "ellipsoid", "star",
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
@@ -581,6 +581,29 @@ def slice_cut(obj, point, normal=(0, 0, 1), keep: str = "above", name: str = Non
     keep 'above' (the side the normal points to), 'below' or 'both'.
     Example: slice_cut("Mini", (0, 0, 0.3)) gives a flat bottom at z = 0.3 mm."""
     return _cut_object(obj, [tuple(point)], normal, "plane", keep, ("above", "below"), name)
+
+
+def magnet_hole(obj, d=5.1 * mm, depth=2.1 * mm) -> Obj:
+    """Bores a cylindrical hole of diameter d and the given depth into the
+    underside of an object, centred (for a magnet in a base)."""
+    name = _name(obj)
+    lo, hi = info(name)["bbox"]
+    cx, cy, z0 = (lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, lo[2]
+    eps = 0.01  # mm: the cutter starts below the face (no coplanar faces)
+    dd = float(_param("d", d, LENGTH)[0])
+    hh = float(_param("depth", depth, LENGTH)[0])
+    tool = cylinder(d=dd * mm, h=(hh + eps) * mm).translate(x=round(cx, 6) * mm, y=round(cy, 6) * mm, z=round(z0 - eps, 6) * mm)
+    return show(Solid(_a.get(name)) - tool, name=name)
+
+
+def rotate(obj, rx=0 * deg, ry=0 * deg, rz=0 * deg) -> Obj:
+    """Rotates an object about its bounding-box centre (one undo step)."""
+    name = _name(obj)
+    lo, hi = info(name)["bbox"]
+    c = [round((lo[i] + hi[i]) / 2, 6) for i in range(3)]
+    s = transform(Solid(_a.get(name)), tx=-c[0] * mm, ty=-c[1] * mm, tz=-c[2] * mm)
+    s = transform(s, rx=rx, ry=ry, rz=rz, tx=c[0] * mm, ty=c[1] * mm, tz=c[2] * mm)
+    return show(s, name=name)
 
 
 def free_memory() -> str:

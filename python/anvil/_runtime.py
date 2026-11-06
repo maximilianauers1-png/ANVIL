@@ -119,6 +119,16 @@ def query(q: str) -> dict:
             target = eval(req["expr"], _NS)
             rep = api.check(target, chord=req.get("chord", 0.01) * api.mm)
             return {"ok": True, "json": json.dumps(rep)}
+        if name == "ai_request":
+            from . import assistant
+            r = assistant.build_request(req["text"], req.get("model") or assistant.DEFAULT_MODEL, req.get("selection", []))
+            return {"ok": True, "json": json.dumps(r)}
+        if name == "ai_map":
+            from . import assistant
+            return {"ok": True, "json": json.dumps(assistant.map_reply(req["response"]))}
+        if name == "ai_models":
+            from . import assistant
+            return {"ok": True, "json": json.dumps({"models": assistant.MODELS, "default": assistant.DEFAULT_MODEL})}
         if name == "plugins":
             return {"ok": True, "json": json.dumps(_plugin_report)}
         if name == "signature":

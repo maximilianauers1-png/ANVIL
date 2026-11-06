@@ -36,7 +36,7 @@ Rectangle {
             previewTimer.restart()
         } else {
             results = []
-            hint = "The local AI assistant (Ollama on 127.0.0.1, typed tools, reviewable Python) arrives with milestone M6."
+            hint = "Enter: ask the local AI (" + App.aiModel + ") – you see the proposed Python before anything changes"
             App.clearPreview()
         }
     }
@@ -47,6 +47,12 @@ Rectangle {
                 App.runCommand(results[current].id)
                 field.text = ""
             }
+        } else if (role === "ai") {
+            const q = field.text.substring(1).trim()
+            if (q.length === 0) return
+            App.aiAsk(q)
+            history.unshift(field.text)
+            field.text = ""
         } else if (role === "python") {
             const src = field.text.substring(1).trim()
             if (src.length === 0 || syntaxError !== "") return

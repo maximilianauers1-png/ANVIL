@@ -102,7 +102,7 @@ try {
   # Fail the build if a runtime DLL is missing (what users would otherwise see as a start error)
   # the DLL the executables import must be the one we ship
   if (-not (Test-Path (Join-Path $dist "python311.dll"))) { throw "package incomplete: python311.dll missing" }
-  foreach ($need in @("ANVIL.exe", "anvil-cli.exe", "python$ver.dll", "python$ver.zip", "vcruntime140.dll", "msvcp140.dll", "Qt6Quick.dll", "anvil-geom.exe", "TKernel.dll")) {
+  foreach ($need in @("ANVIL.exe", "anvil-cli.exe", "python$ver.dll", "python$ver.zip", "vcruntime140.dll", "msvcp140.dll", "Qt6Quick.dll", "anvil-geom.exe", "anvil-ai.exe", "TKernel.dll")) {
     if (-not (Test-Path (Join-Path $dist $need))) { throw "package incomplete: $need missing" }
   }
   Write-Host "`nPackaged: $dist\ANVIL.exe" -ForegroundColor Green

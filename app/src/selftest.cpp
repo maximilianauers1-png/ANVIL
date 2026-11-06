@@ -447,6 +447,38 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     add("move: snap on again", [this] { clickItem("snapToggle"); }, [this] { return view_->property("snapEnabled").toBool(); });
     add("move: perspective again", [this] { app_->requestView("perspective"); }, [this] { return idle() && !view_->ortho(); });
 
+    // 20) Local AI assistant against a stand-in Ollama server (ANVIL_OLLAMA_URL, set by the test runner)
+    if (qEnvironmentVariableIsSet("ANVIL_TEST_AI")) {
+        add("AI mode: server found", [this] { app_->setMode("AI"); app_->aiRefresh(); },
+            [this] { return app_->aiStatus().value("running").toBool(); }, 20000);
+        add("AI installer: install Qwen3 8B", [this] { clickItem("aiInstall_qwen3:8b"); }, [this] {
+            for (const auto& m : app_->aiStatus().value("models").toList())
+                if (m.toMap()["name"].toString() == "qwen3:8b") return app_->aiModel() == "qwen3:8b" && !app_->aiBusy();
+            return false;
+        }, 20000);
+        add("AI: use Qwen2.5 7B", [this] { app_->setAiModel("qwen2.5:7b"); }, [this] { return app_->aiModel() == "qwen2.5:7b"; });
+        add("AI: ask from the panel", [this] { typeInto("aiPrompt", "Hebe den rechten Arm und gib ihm ein Schwert"); }, [this] {
+            const auto p = app_->aiProposal();
+            const QString py = p.value("python").toString();
+            return !app_->aiBusy() && py.contains("edit('hero'") && py.contains("equip('hero', 'zweihander'");
+        }, 30000);
+        add("screenshot AI proposal", [this] { screenshot("18_ai_proposal"); });
+        add("AI: apply = one command", [this] {
+            hist_before_ = app_->history().size();
+            clickItem("aiApply");
+        }, [this] {
+            auto h = app_->history();
+            return idle() && h.size() == hist_before_ + 1 && h.back().toMap()["source"].toString().startsWith("edit('hero'") &&
+                   h.back().toMap()["source"].toString().contains("equip(") && hasObject("Zweihander2");
+        }, 30000);
+        add("AI: invalid tool calls are refused", [this] { app_->aiAsk("bogus request"); }, [this] {
+            const auto p = app_->aiProposal();
+            return !app_->aiBusy() && p.value("python").toString().isEmpty() && p.value("errors").toList().size() == 2;
+        }, 30000);
+        add("AI: discard", [this] { clickItem("aiDiscard"); }, [this] { return app_->aiProposal().isEmpty(); });
+        add("AI: back to Design", [this] { app_->setMode("Design"); }, [this] { return true; });
+    }
+
     // 14) Studio scenery: sunset, fjord, night (procedural environment pass)
     for (const char* sc : {"sunset", "fjord", "night"}) {
         const QString name = sc;
