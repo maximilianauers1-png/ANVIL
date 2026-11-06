@@ -47,7 +47,11 @@ inline int floor_div(int a, int b) { return a >= 0 ? a / b : -((-a + b - 1) / b)
 
 struct Brick {
     std::array<std::uint16_t, kBrickVoxels> v{};  // f/h as binary16
-    std::uint64_t stamp = 0;                      // unique per content change (chunk mesh keys)
+    // Mesh stamp: changes whenever a value the surface depends on changes.
+    // Contouring only uses edges with |a| + |b| < 2.5 (in h), so edits among
+    // values >= 2.5 (band upkeep by reinitialisation) keep it: chunk meshes
+    // are rebuilt only where the surface can actually differ.
+    std::uint64_t stamp = 0;
     static int index(int x, int y, int z) { return (z * kBrick + y) * kBrick + x; }
 };
 
@@ -77,7 +81,9 @@ class Grid {
     std::size_t interior_count() const { return interior_.size(); }
     const std::unordered_map<IVec3, std::shared_ptr<Brick>, IVec3Hash>& bricks() const { return bricks_; }
     Box3 bounds() const;  // of the allocated bricks (mm)
-    /// Content stamp of a brick (0 = not allocated); changes with every edit.
+    /// New mesh stamp for a brick after a surface-relevant edit.
+    void touch_mesh(const IVec3& b);
+    /// Mesh stamp of a brick (0/1 = not allocated, outside/inside).
     std::uint64_t brick_stamp(const IVec3& b) const;
     /// Key of a chunk's mesh: its bricks and the one-brick ring it reads.
     std::uint64_t chunk_key(const IVec3& chunk) const;
@@ -116,6 +122,10 @@ struct ChunkMesh {
 };
 /// Cached by chunk key (process-wide LRU): unchanged chunks are not re-meshed.
 std::shared_ptr<const ChunkMesh> chunk_mesh(const Grid& g, const IVec3& chunk);
+/// Meshes of the given chunks, the uncached ones in parallel (live strokes).
+/// `built` (optional) accumulates how many were actually re-meshed.
+std::vector<std::shared_ptr<const ChunkMesh>> remesh_chunks(const Grid& g, const std::vector<IVec3>& chunks,
+                                                            std::size_t* built = nullptr);
 /// All chunk meshes of the grid (parallel for the uncached ones).
 std::vector<std::shared_ptr<const ChunkMesh>> chunk_meshes(const Grid& g);
 /// Welds chunk meshes into one closed mesh: vertices of the same cell merge

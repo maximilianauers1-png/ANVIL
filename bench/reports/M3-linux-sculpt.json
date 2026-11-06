@@ -1,0 +1,9 @@
+{
+ "voxel_mm": 0.05, "radius_mm": 2, "active_voxels": 23939584, "bricks": 46757, "triangles": 4357308,
+ "build_ms": 210.1, "mesh_all_chunks_ms": 226.9, "weld_ms": 311.6,
+ "strokes": [
+  {"brush": "draw", "frames": 121, "dabs": 120, "p50_ms": 25.99, "p99_ms": 33.33, "max_ms": 35.53, "max_chunks_per_frame": 48, "dab_p50_ms": 18.01, "remesh_p50_ms": 8.01, "remeshed_chunks": 4163},
+  {"brush": "smooth", "frames": 121, "dabs": 120, "p50_ms": 22.16, "p99_ms": 31.42, "max_ms": 33.09, "max_chunks_per_frame": 48, "dab_p50_ms": 14.06, "remesh_p50_ms": 8.06, "remeshed_chunks": 4046},
+  {"brush": "grab", "frames": 121, "dabs": 134, "p50_ms": 30.90, "p99_ms": 61.22, "max_ms": 65.34, "max_chunks_per_frame": 52, "dab_p50_ms": 22.05, "remesh_p50_ms": 7.74, "remeshed_chunks": 2957}
+ ]
+}

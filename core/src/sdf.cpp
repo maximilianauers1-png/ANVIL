@@ -142,14 +142,19 @@ Brick& Grid::mutable_brick(const IVec3& b) {
     } else if (it->second.use_count() > 1) {
         it->second = std::make_shared<Brick>(*it->second);  // copy on write: snapshots keep the old one
     }
-    it->second->stamp = g_stamp.fetch_add(1);
     return *it->second;
+}
+
+void Grid::touch_mesh(const IVec3& b) {
+    auto it = bricks_.find(b);
+    if (it != bricks_.end()) mutable_brick(b).stamp = g_stamp.fetch_add(1);
 }
 
 void Grid::set(int i, int j, int k, float f) {
     const IVec3 b{floor_div(i, kBrick), floor_div(j, kBrick), floor_div(k, kBrick)};
-    mutable_brick(b).v[Brick::index(i - b.x * kBrick, j - b.y * kBrick, k - b.z * kBrick)] =
-        float_to_half(std::clamp(f, -kBand, kBand));
+    Brick& br = mutable_brick(b);
+    br.v[Brick::index(i - b.x * kBrick, j - b.y * kBrick, k - b.z * kBrick)] = float_to_half(std::clamp(f, -kBand, kBand));
+    br.stamp = g_stamp.fetch_add(1);
 }
 
 void Grid::compact(const std::vector<IVec3>& candidates) {
@@ -270,6 +275,7 @@ Grid build(const std::function<double(const Vec3&)>& f, const Box3& bounds, doub
         if (keep[i]) {
             Brick& dst = g.mutable_brick(todo[i]);
             dst.v = filled[i]->v;
+            dst.stamp = g_stamp.fetch_add(1);
         } else if (inside[i]) {
             g.mark_interior(todo[i]);
         }
@@ -575,18 +581,25 @@ std::vector<IVec3> store_block(Grid& g, const Block& B, const Block& before) {
                         }
                 if (!diff) continue;
                 std::array<std::uint16_t, kBrickVoxels> hv;
-                bool real = false;  // differences below half precision vanish on conversion
+                bool real = false;      // differences below half precision vanish on conversion
+                bool relevant = false;  // a value the surface depends on changed (|f| < 2.5 h)
                 for (int z = 0; z < kBrick; ++z)
                     for (int y = 0; y < kBrick; ++y)
                         for (int x = 0; x < kBrick; ++x) {
                             const int X = bx * kBrick + x, Y = by * kBrick + y, Z = bz * kBrick + z;
                             const std::uint16_t nv = float_to_half(std::clamp(B.at(X, Y, Z), -kBand, kBand));
                             hv[Brick::index(x, y, z)] = nv;
-                            real = real || nv != float_to_half(std::clamp(before.at(X, Y, Z), -kBand, kBand));
+                            const float ov = std::clamp(before.at(X, Y, Z), -kBand, kBand);
+                            if (nv != float_to_half(ov)) {
+                                real = true;
+                                relevant = relevant || std::min(std::abs(ov), std::abs(half_to_float(nv))) < 2.5f;
+                            }
                         }
                 if (!real) continue;
                 IVec3 bc{B.b0.x + bx, B.b0.y + by, B.b0.z + bz};
-                g.mutable_brick(bc).v = hv;
+                Brick& dst = g.mutable_brick(bc);
+                dst.v = hv;
+                if (relevant) dst.stamp = g_stamp.fetch_add(1);
                 changed.push_back(bc);
             }
     return changed;
@@ -714,7 +727,12 @@ void StrokeApplier::dab(const Vec3& cc, const Vec3& grab) {
     double amount = 0;
     if (brush_ == Brush::Draw || brush_ == Brush::Carve) amount = st * spacing_ / 4;  // mm per dab
     if (brush_ == Brush::Grab) amount = norm(grab);
-    const int sub = std::max(1, int(std::ceil(amount / h)));
+    int sub = std::max(1, int(std::ceil(amount / h)));
+    // Grab advects semi-Lagrangian (unconditionally stable); the deformation
+    // x -> x + w(|x-c|/R) d stays injective while |d| max|w'| < 1; for the
+    // Wendland C2 kernel w'(q) = -20 q (1-q)^3, max |w'| = 2.11 / R at q = 1/4,
+    // so |d| < 0.47 R. Sub-steps of at most R/4 keep a 1.9x margin.
+    if (brush_ == Brush::Grab) sub = std::max(1, int(std::ceil(amount / (0.25 * R))));
     const Vec3 origin = Vec3{double(B.b0.x), double(B.b0.y), double(B.b0.z)} * (kBrick * h);
     const Vec3 pn = plane_n_;
     const double pd = plane_d_;
@@ -767,7 +785,8 @@ void StrokeApplier::dab(const Vec3& cc, const Vec3& grab) {
         });
     }
     {
-        const int rr = int(std::ceil(reach / h));
+        // only where the brush changed values (sphere box + the 3-voxel stencil reach)
+        const int rr = int(std::ceil((R + norm(grab)) / h)) + 3;
         const Vec3 cb = (cc - origin) / h;
         reinit(B, {int(cb.x) - rr, int(cb.y) - rr, int(cb.z) - rr}, {int(cb.x) + rr, int(cb.y) + rr, int(cb.z) + rr});
     }
@@ -801,13 +820,110 @@ ChunkCache& chunk_cache() {
     static ChunkCache c;
     return c;
 }
+// Values around one brick: the 3x3x3 neighbour bricks resolved once.
+struct Neighbourhood {
+    const Brick* b[27];
+    float implied[27];
+    void load(const Grid& g, const IVec3& c) {
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int k = (dz + 1) * 9 + (dy + 1) * 3 + (dx + 1);
+                    const IVec3 n{c.x + dx, c.y + dy, c.z + dz};
+                    auto it = g.bricks().find(n);
+                    b[k] = it == g.bricks().end() ? nullptr : it->second.get();
+                    implied[k] = g.is_interior(n) ? -kBand : kBand;
+                }
+    }
+    // voxel (x, y, z) relative to the centre brick's first voxel, -8 .. 15
+    float at(int x, int y, int z) const {
+        const int bx = x < 0 ? -1 : x >= kBrick, by = y < 0 ? -1 : y >= kBrick, bz = z < 0 ? -1 : z >= kBrick;
+        const int k = (bz + 1) * 9 + (by + 1) * 3 + (bx + 1);
+        if (!b[k]) return implied[k];
+        return half_table().t[b[k]->v[Brick::index(x - bx * kBrick, y - by * kBrick, z - bz * kBrick)]];
+    }
+};
+
 std::shared_ptr<const ChunkMesh> build_chunk(const Grid& g, const IVec3& chunk, std::uint64_t key) {
+    // Same topology and vertex arithmetic as contour()/CellSolver (bit-identical
+    // vertices across chunk borders), but: only the chunk's own bricks, values
+    // through a neighbour table, cell vertices in a dense array.
     auto cm = std::make_shared<ChunkMesh>();
     cm->key = key, cm->chunk = chunk;
-    std::unordered_map<IVec3, std::uint32_t, CellKeyHash> vmap;
-    contour(g, [&](const IVec3& b) { return chunk_of_brick(b) == chunk; }, vmap, cm->mesh);
-    cm->cell.resize(cm->mesh.V.size());
-    for (const auto& [c, id] : vmap) cm->cell[id] = pack_cell(c);
+    constexpr int kCells = kChunkBricks * kBrick;  // cells per axis owned by the chunk
+    constexpr int kSpan = kCells + 1;              // cells referenced: lo-1 .. lo+kCells-1
+    const IVec3 lo{chunk.x * kCells, chunk.y * kCells, chunk.z * kCells};
+    std::vector<std::int32_t> vid(std::size_t(kSpan) * kSpan * kSpan, -2);  // -2 unknown, -1 none
+    const double h = g.h();
+    Mesh& out = cm->mesh;
+    std::vector<std::uint64_t>& cells = cm->cell;
+    static const int E[12][6] = {{0, 0, 0, 1, 0, 0}, {0, 1, 0, 1, 1, 0}, {0, 0, 1, 1, 0, 1}, {0, 1, 1, 1, 1, 1},
+                                 {0, 0, 0, 0, 1, 0}, {1, 0, 0, 1, 1, 0}, {0, 0, 1, 0, 1, 1}, {1, 0, 1, 1, 1, 1},
+                                 {0, 0, 0, 0, 0, 1}, {1, 0, 0, 1, 0, 1}, {0, 1, 0, 0, 1, 1}, {1, 1, 0, 1, 1, 1}};
+    Neighbourhood nb;
+    for (int cz = 0; cz < kChunkBricks; ++cz)
+        for (int cy = 0; cy < kChunkBricks; ++cy)
+            for (int cx = 0; cx < kChunkBricks; ++cx) {
+                const IVec3 bc{chunk.x * kChunkBricks + cx, chunk.y * kChunkBricks + cy, chunk.z * kChunkBricks + cz};
+                auto bit = g.bricks().find(bc);
+                if (bit == g.bricks().end()) continue;
+                nb.load(g, bc);
+                const IVec3 o{bc.x * kBrick, bc.y * kBrick, bc.z * kBrick};  // first voxel of the brick
+                // vertex of cell (global i, j, k); cells used here lie within one voxel of this brick
+                auto vert = [&](int i, int j, int k) -> std::int64_t {
+                    const std::size_t di = std::size_t(i - lo.x + 1), dj = std::size_t(j - lo.y + 1), dk = std::size_t(k - lo.z + 1);
+                    std::int32_t& slot = vid[(dk * kSpan + dj) * kSpan + di];
+                    if (slot != -2) return slot;
+                    float v[2][2][2];
+                    for (int z = 0; z < 2; ++z)
+                        for (int y = 0; y < 2; ++y)
+                            for (int x = 0; x < 2; ++x) v[z][y][x] = nb.at(i - o.x + x, j - o.y + y, k - o.z + z);
+                    double mx = 0, my = 0, mz = 0;
+                    int n = 0;
+                    for (const auto& e : E) {
+                        const float a = v[e[2]][e[1]][e[0]], c = v[e[5]][e[4]][e[3]];
+                        if (!crossing(a, c)) continue;
+                        const double t = a / double(a - c);
+                        mx += e[0] + t * (e[3] - e[0]), my += e[1] + t * (e[4] - e[1]), mz += e[2] + t * (e[5] - e[2]);
+                        ++n;
+                    }
+                    if (!n) return slot = -1;
+                    out.V.push_back(Vec3{(i + mx / n) * h, (j + my / n) * h, (k + mz / n) * h});
+                    cells.push_back(pack_cell({i, j, k}));
+                    return slot = std::int32_t(out.V.size() - 1);
+                };
+                const auto& brick = bit->second;
+                for (int z = 0; z < kBrick; ++z)
+                    for (int y = 0; y < kBrick; ++y)
+                        for (int x = 0; x < kBrick; ++x) {
+                            const int i = o.x + x, j = o.y + y, k = o.z + z;
+                            const float f0 = half_table().t[brick->v[Brick::index(x, y, z)]];
+                            for (int a = 0; a < 3; ++a) {
+                                const float f1 = nb.at(x + (a == 0), y + (a == 1), z + (a == 2));
+                                if (!crossing(f0, f1)) continue;
+                                const int u = (a + 1) % 3, w = (a + 2) % 3;
+                                auto cell = [&](int du, int dw) {
+                                    int d[3] = {0, 0, 0};
+                                    d[u] = du, d[w] = dw;
+                                    return vert(i + d[0], j + d[1], k + d[2]);
+                                };
+                                std::int64_t q[4] = {cell(-1, -1), cell(0, -1), cell(0, 0), cell(-1, 0)};
+                                if (q[0] < 0 || q[1] < 0 || q[2] < 0 || q[3] < 0) continue;
+                                if (f0 >= 0) std::swap(q[1], q[3]);
+                                const Vec3 &p0 = out.V[q[0]], &p1 = out.V[q[1]], &p2 = out.V[q[2]], &p3 = out.V[q[3]];
+                                auto T = [](std::int64_t a2, std::int64_t b2, std::int64_t c2) {
+                                    return Tri{std::uint32_t(a2), std::uint32_t(b2), std::uint32_t(c2)};
+                                };
+                                if (dot(p2 - p0, p2 - p0) <= dot(p3 - p1, p3 - p1)) {
+                                    out.F.push_back(T(q[0], q[1], q[2]));
+                                    out.F.push_back(T(q[0], q[2], q[3]));
+                                } else {
+                                    out.F.push_back(T(q[0], q[1], q[3]));
+                                    out.F.push_back(T(q[1], q[2], q[3]));
+                                }
+                            }
+                        }
+            }
     return cm;
 }
 }  // namespace
@@ -833,6 +949,29 @@ std::shared_ptr<const ChunkMesh> chunk_mesh(const Grid& g, const IVec3& chunk) {
         for (std::size_t i = 0; i < ages.size() / 4; ++i) cc.map.erase(ages[i].second);
     }
     return cm;
+}
+
+std::vector<std::shared_ptr<const ChunkMesh>> remesh_chunks(const Grid& g, const std::vector<IVec3>& chunks,
+                                                            std::size_t* built) {
+    std::vector<std::shared_ptr<const ChunkMesh>> out(chunks.size());
+    std::atomic<std::size_t> n{0};
+    parallel_for(chunks.size(), [&](std::size_t i) {
+        const std::uint64_t key = g.chunk_key(chunks[i]);
+        {
+            auto& cc = chunk_cache();
+            std::lock_guard lk(cc.mu);
+            auto it = cc.map.find(key);
+            if (it != cc.map.end()) {
+                it->second.first = ++cc.tick;
+                out[i] = it->second.second;
+                return;
+            }
+        }
+        out[i] = chunk_mesh(g, chunks[i]);
+        ++n;
+    });
+    if (built) *built += n;
+    return out;
 }
 
 std::vector<std::shared_ptr<const ChunkMesh>> chunk_meshes(const Grid& g) {
