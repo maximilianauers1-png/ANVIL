@@ -26,6 +26,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <psapi.h>  // K32GetProcessMemoryInfo (kernel32, PSAPI_VERSION 2)
 #else
 #include <signal.h>
 #include <unistd.h>
