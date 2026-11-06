@@ -229,6 +229,15 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     }, [this] { return idle() && item("makeSculptable") != nullptr; }, 10000);
     add("click Make sculptable", [this] { clickItem("makeSculptable"); },
         [this] { return idle() && app_->objectKind("Cylinder1") == "Sculpt" && view_->sculptReady("Cylinder1"); }, 60000);
+    add("type a brush size into the number box", [this] {
+        QQuickItem* f = item("sculptRadiusField");
+        if (!f) return;
+        f->forceActiveFocus();
+        QMetaObject::invokeMethod(f, "selectAll");
+        for (QChar c : QString("1.5")) key(0, Qt::NoModifier, QString(c));
+        key(Qt::Key_Return);
+    }, [this] { return std::abs(view_->property("sculptRadius").toDouble() - 1.5) < 1e-9; });
+    add("set size back to 3 mm", [this] { view_->setProperty("sculptRadius", 3.0); });
     add("draw stroke across the top", [this] {
         vol_before_ = objectValue("Cylinder1", "volume");
         QPointF a = project(-8, 6, 3), b = project(8, 6, 3);
@@ -285,46 +294,18 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     add("screenshot sculpt", [this] { screenshot("12_sculpt"); });
     add("back to Design", [this] { app_->setMode("Design"); }, [this] { return !view_->sculptMode(); });
 
-    // 16) Mini Forge: demon -> pose -> base -> stand on base (all via the Mini panel)
-    add("Mini mode, new demon", [this] {
-        app_->setMode("Mini");
-        app_->setSelection({});
-        clickItem("miniDemon");
-    }, [this] { return idle() && hasObject("Demon1"); }, 30000);
-    add("pose: attack", [this] {
-        app_->setSelection({"Demon1"});
-        clickItem("pose_attack");
-    }, [this] {
-        auto h = app_->history();
-        if (!idle() || h.isEmpty()) return false;
-        const QString src = h.back().toMap()["source"].toString();
-        return src.startsWith("pose(") && src.contains("attack");
-    }, 30000);
-    add("base 32 mm", [this] { clickItem("base32"); }, [this] { return idle() && hasObject("Base1"); }, 30000);
-    add("stand on base", [this] { clickItem("miniOnBase"); },
-        [this] { return idle() && hasObject("Demon1") && !hasObject("Base1"); }, 60000);
-    add("demon on base is clay", [this] {}, [this] { return view_->sculptObjects().contains("Demon1"); }, 60000);
-    add("frame mini", [this] {
-        app_->setSelection({"Demon1"});
-        for (const auto& o : app_->objects())
-            if (o.toMap()["name"] != "Demon1") app_->toggleVisible(o.toMap()["name"].toString());
-        app_->requestView("iso");
-        view_->frameAll();
-    }, [this] { return idle(); });
-    add("screenshot mini", [this] { screenshot("13_mini"); });
-
     // 17) M4: import a rigged GLB (as from Tripo / Meshy) -> pose -> weapon -> merge for print
     if (const QString glb = qEnvironmentVariable("ANVIL_TEST_GLB"); !glb.isEmpty()) {
         add("import mini (drop GLB)", [this, glb] {
+            app_->setMode("Mini");
             app_->setSelection({});
             for (const auto& o : app_->objects())
                 if (o.toMap()["visible"].toBool()) app_->toggleVisible(o.toMap()["name"].toString());
             app_->dropFiles({QUrl::fromLocalFile(glb)});
         }, [this] { return idle() && hasObject("hero"); }, 60000);
-        add("pose imported mini: attack", [this] {
-            app_->setSelection({"hero"});
-            clickItem("pose_attack");
-        }, [this] {
+        add("select imported mini", [this] { app_->setSelection({"hero"}); },
+            [this] { QQuickItem* b = item("pose_attack"); return b && b->isVisible(); });
+        add("pose imported mini: attack", [this] { clickItem("pose_attack"); }, [this] {
             auto h = app_->history();
             if (!idle() || h.isEmpty()) return false;
             const QString src = h.back().toMap()["source"].toString();
@@ -339,8 +320,9 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
             view_->frameAll();
         }, [this] { return idle(); });
         add("screenshot imported mini", [this] { screenshot("14_mini_import"); });
+        add("base 25 mm", [this] { clickItem("base25"); }, [this] { return idle() && hasObject("Base1"); }, 30000);
         add("merge for print", [this] {
-            app_->setSelection({"hero", "Zweihander1"});
+            app_->setSelection({"hero", "Zweihander1", "Base1"});
             clickItem("miniMerge");
         }, [this] { return idle() && hasObject("Mini1") && view_->sculptObjects().contains("Mini1"); }, 180000);
         add("screenshot merged mini", [this] { screenshot("15_mini_merged"); });

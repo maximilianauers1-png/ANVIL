@@ -56,37 +56,29 @@ Rectangle {
         }
 
         Section { text: "SETTINGS" }
-        GridLayout {
-            columns: 3
-            columnSpacing: 6
-            rowSpacing: 2
-            ALabel { text: "Size" }
-            Slider {
-                objectName: "sculptRadius"
-                Layout.preferredWidth: 170
-                from: Math.log(0.2); to: Math.log(20)          // logarithmic 0.2 .. 20 mm
-                value: Math.log(root.view.sculptRadius)
-                onMoved: root.view.sculptRadius = Math.exp(value)
-            }
-            ALabel { text: App.formatLength(root.view.sculptRadius); Layout.preferredWidth: 64 }
-            ALabel { text: "Intensity" }
-            Slider {
-                objectName: "sculptStrength"
-                Layout.preferredWidth: 170
-                from: 0.05; to: 1
-                value: root.view.sculptStrength
-                onMoved: root.view.sculptStrength = value
-            }
-            ALabel { text: Math.round(root.view.sculptStrength * 100) + " %"; Layout.preferredWidth: 64 }
-            ALabel { text: "Falloff" }
-            Slider {
-                objectName: "sculptFalloff"
-                Layout.preferredWidth: 170
-                from: Math.log(0.4); to: Math.log(3)            // exponent: soft .. sharp
-                value: Math.log(root.view.sculptFalloff)
-                onMoved: root.view.sculptFalloff = Math.round(Math.exp(value) * 20) / 20
-            }
-            ALabel { text: root.view.sculptFalloff < 0.8 ? "soft" : root.view.sculptFalloff > 1.4 ? "sharp" : "medium"; Layout.preferredWidth: 64 }
+        SliderField {
+            label: "Size"
+            sliderName: "sculptRadius"; fieldName: "sculptRadiusField"
+            kind: "length"; log: true; from: 0.2; to: 20             // brush radius, mm
+            value: root.view.sculptRadius
+            tip: "Brush radius (type e.g. 1.5 or 1.5 mm)"
+            onEdited: function (v) { root.view.sculptRadius = v }
+        }
+        SliderField {
+            label: "Intensity"
+            sliderName: "sculptStrength"; fieldName: "sculptStrengthField"
+            kind: "percent"; from: 0.05; to: 1
+            value: root.view.sculptStrength
+            tip: "At 100 % one stroke raises the surface by about half the brush size"
+            onEdited: function (v) { root.view.sculptStrength = v }
+        }
+        SliderField {
+            label: "Falloff"
+            sliderName: "sculptFalloff"; fieldName: "sculptFalloffField"
+            kind: "number"; decimals: 2; log: true; from: 0.4; to: 3  // exponent: < 0.8 soft, > 1.4 sharp
+            value: root.view.sculptFalloff
+            tip: "Edge profile exponent: 0.4 very soft … 1 medium … 3 sharp"
+            onEdited: function (v) { root.view.sculptFalloff = Math.round(v * 100) / 100 }
         }
         RowLayout {
             visible: root.view.sculptBrush === "texture"
@@ -103,17 +95,14 @@ Rectangle {
                 }
             }
         }
-        RowLayout {
+        SliderField {
             visible: root.view.sculptBrush === "texture"
-            spacing: 6
-            ALabel { text: "Cell" }
-            Slider {
-                Layout.preferredWidth: 170
-                from: Math.log(0.2); to: Math.log(3)
-                value: Math.log(root.view.sculptPatternSize)
-                onMoved: root.view.sculptPatternSize = Math.round(Math.exp(value) * 100) / 100
-            }
-            ALabel { text: App.formatLength(root.view.sculptPatternSize) }
+            label: "Cell"
+            fieldName: "sculptCellField"
+            kind: "length"; log: true; from: 0.2; to: 3
+            value: root.view.sculptPatternSize
+            tip: "Size of one scale / ring / rivet / stone"
+            onEdited: function (v) { root.view.sculptPatternSize = Math.round(v * 100) / 100 }
         }
         RowLayout {
             spacing: 4

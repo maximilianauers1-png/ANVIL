@@ -336,10 +336,6 @@ def _(ctx):
 
 
 # --- Mini Forge (M4) ------------------------------------------------------------
-for _p, _label in (("human", "Human"), ("demon", "Demon")):
-    registry.add(Command(id=f"mini.{_p}", label=f"New {_label.lower()} figure", category="Mini",
-                         help=f"{_label} figure, 32 mm (pose and proportions in the panel)", keywords="mini figure body",
-                         build=(lambda p: (lambda ctx: f"show(figure({p!r}, height=32*mm), name=unique_name({p.capitalize()!r}))"))(_p)))
 for _d in (25, 32, 40, 50):
     registry.add(Command(id=f"mini.base{_d}", label=f"Base {_d} mm", category="Mini",
                          help=f"Round {_d} mm base with flagstones", keywords="mini base plinth",
@@ -406,9 +402,9 @@ registry.radial = {
         "sketch": ["sketch.extrude", "sketch.solidify", "sketch.cut", "sketch.revolve", "edit.delete",
                    "sketch.edit", "draw.polyline", _VIEW],
     },
-    # Mini mode: create figures and bases, pose, join
+    # Mini mode: import minis, bases, pose, weapons, merge
     "Mini": {
-        "empty": ["mini.import", "mini.human", "mini.base32", "mini.base25", "mini.base40", "mini.demon",
+        "empty": ["mini.import", "file.import_stl", "mini.base32", "mini.base25", "mini.base40", "mini.base50",
                   "file.export_stl", _VIEW],
         "selection": ["mini.pose_attack", "mini.pose_walk", "mini.pose_stand", "mini.pose_cast", _WEAPONS,
                       "mini.merge", "file.export_stl", _VIEW],

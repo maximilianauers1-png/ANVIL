@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Anvil.Native
 
-// Mini Forge: import (Tripo, Meshy, ...) or generate -> pose -> weapons ->
+// Mini Forge: import (Tripo, Meshy, ...) -> pose -> weapons ->
 // base -> merge -> sculpt details -> print.
 // Every button is one Python command; pose angles and proportions are normal
 // parameters in the panel on the right (type or drag their names).
@@ -19,7 +19,7 @@ Rectangle {
     readonly property bool selAttach: sel !== "" && kindOf(sel) === "Attach"
     property string hand: "r"
     readonly property var printable: App.objects.filter(function (o) { return o.visible && o.kind !== "Sketch" }).map(function (o) { return o.name })
-    readonly property var figures: App.objects.filter(function (o) { return o.kind === "Figure" || o.kind === "Sculpt" }).map(function (o) { return o.name })
+    readonly property var figures: App.objects.filter(function (o) { return o.visible && (o.kind === "Model" || o.kind === "Figure" || o.kind === "Sculpt") }).map(function (o) { return o.name })
     readonly property var bases: App.objects.filter(function (o) { return o.kind === "MiniBase" }).map(function (o) { return o.name })
     radius: Theme.radius
     color: Theme.panel
@@ -41,11 +41,6 @@ Rectangle {
             Layout.fillWidth: true
             text: "Import mini (Tripo, Meshy: GLB / OBJ)…"
             onClicked: App.runCommand("mini.import")
-        }
-        RowLayout {
-            spacing: 4
-            AButton { objectName: "miniDemon"; text: "New demon"; onClicked: App.runCommand("mini.demon") }
-            AButton { objectName: "miniHuman"; text: "New human"; onClicked: App.runCommand("mini.human") }
         }
         RowLayout {
             visible: root.selFigure
@@ -81,7 +76,7 @@ Rectangle {
             wrapMode: Text.Wrap
             dim: true
             font.pixelSize: Theme.fontSmall
-            text: "Fine-tune every joint on the right: drag a name (e.g. l_elbow, tail_curl) sideways. Build and heroic change the proportions."
+            text: "Fine-tune every joint on the right: drag a name (e.g. l_elbow, r_shoulder_fwd, spine) sideways or type a value."
         }
 
         Section { text: "3  WEAPONS"; visible: root.selModel || root.selAttach }
