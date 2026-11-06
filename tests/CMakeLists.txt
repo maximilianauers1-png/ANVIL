@@ -64,3 +64,9 @@ add_test(NAME acceptance_m4
          COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/m4_suite.py)
 set_tests_properties(acceptance_m4 PROPERTIES PASS_REGULAR_EXPRESSION "M4 SUITE OK" TIMEOUT 900
                      ENVIRONMENT "ANVIL_TEST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/acceptance")
+
+# Cut tools (knife, lasso, drill, slice) on solids, clay and imported minis
+add_test(NAME acceptance_cut
+         COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/cut_suite.py)
+set_tests_properties(acceptance_cut PROPERTIES PASS_REGULAR_EXPRESSION "CUT SUITE OK" TIMEOUT 600
+                     ENVIRONMENT "ANVIL_TEST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/acceptance")

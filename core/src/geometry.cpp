@@ -17,6 +17,7 @@
 #include "anvil/tolerance.hpp"
 #include "anvil/validate.hpp"
 #include "anvil/weapon.hpp"
+#include "anvil/cut.hpp"
 
 namespace anvil {
 
@@ -57,6 +58,7 @@ const char* node_kind_name(NodeKind k) {
         case NodeKind::Model: return "Model";
         case NodeKind::Weapon: return "Weapon";
         case NodeKind::Attach: return "Attach";
+        case NodeKind::Cut: return "Cut";
     }
     return "?";
 }
@@ -254,8 +256,9 @@ bool is_brep_kind(NodeKind k) {
 
 const std::vector<std::string>& attr_names(NodeKind k) {
     static const std::vector<std::string> edges{"edges"}, faces{"faces"}, step{"path", "sha256"}, ref{"name"},
-        solid{"ends", "join"}, fig{"preset"}, mbase{"texture"}, weap{"type"}, attach{"hand"}, none;
+        solid{"ends", "join"}, fig{"preset"}, mbase{"texture"}, weap{"type"}, attach{"hand"}, cutattr{"mode", "keep", "path", "dir", "eye"}, none;
     switch (k) {
+        case NodeKind::Cut: return cutattr;
         case NodeKind::Weapon: return weap;
         case NodeKind::Attach: return attach;
         case NodeKind::MiniBase: return mbase;
@@ -561,6 +564,42 @@ std::string to_python(const NodePtr& n) {
         case NodeKind::Sketch:
             o << sketch_to_python(*n->sketch);
             break;
+        case NodeKind::Cut: {
+            // cut(src, path=[(x, y, z), ...], direction=(x, y, z), mode=..., keep=...): numbers as stored
+            auto split = [](const std::string& str, char sep) {
+                std::vector<std::string> v;
+                std::string cur;
+                for (char c : str + sep) {
+                    if (c == sep) {
+                        if (!cur.empty()) v.push_back(cur);
+                        cur.clear();
+                    } else {
+                        cur.push_back(c);
+                    }
+                }
+                return v;
+            };
+            auto attr = [&](const char* k) { auto it = n->attrs.find(k); return it == n->attrs.end() ? std::string() : it->second; };
+            o << "cut(" << to_python(n->inputs[0]) << ", path=[";
+            bool first = true;
+            for (const auto& pt : split(attr("path"), ';')) {
+                auto c = split(pt, ',');
+                o << (first ? "" : ", ") << "(" << (c.size() > 0 ? c[0] : "0") << ", " << (c.size() > 1 ? c[1] : "0") << ", "
+                  << (c.size() > 2 ? c[2] : "0") << ")";
+                first = false;
+            }
+            auto d = split(attr("dir").empty() ? "0,0,-1" : attr("dir"), ',');
+            o << "], direction=(" << (d.size() > 0 ? d[0] : "0") << ", " << (d.size() > 1 ? d[1] : "0") << ", "
+              << (d.size() > 2 ? d[2] : "-1") << "), mode=" << py_str(attr("mode").empty() ? "knife" : attr("mode"))
+              << ", keep=" << py_str(attr("keep"));
+            if (!attr("eye").empty()) {
+                auto e = split(attr("eye"), ',');
+                o << ", eye=(" << (e.size() > 0 ? e[0] : "0") << ", " << (e.size() > 1 ? e[1] : "0") << ", "
+                  << (e.size() > 2 ? e[2] : "0") << ")";
+            }
+            o << ")";
+            break;
+        }
         case NodeKind::Model:
             o << "model_file(" << py_str(n->source_path) << ", sha256=" << py_str(n->source_sha256);
             for (const auto& sp : param_specs(n->kind)) {
@@ -737,7 +776,7 @@ struct Evaluator {
         if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::ImportedMesh ||
             n->kind == NodeKind::Sculpt || n->kind == NodeKind::Figure || n->kind == NodeKind::MiniBase ||
             n->kind == NodeKind::Model || n->kind == NodeKind::Weapon || n->kind == NodeKind::Attach ||
-            is_mesh_primitive(n->kind))
+            n->kind == NodeKind::Cut || is_mesh_primitive(n->kind))
             return true;
         if (n->kind == NodeKind::Ref) {
             RefGuard g(ref_depth);
@@ -1098,6 +1137,82 @@ struct Evaluator {
                 sh->mesh = std::make_shared<const Mesh>(sdf::weld(sh->chunks));
                 return sh;
             }
+            case NodeKind::Cut: {
+                cut::Spec spec;
+                try {
+                    spec = cut::parse(n->attrs);
+                } catch (const std::exception& e) {
+                    throw GeometryError(e.what());
+                }
+                auto src = solid_shape(eval(n->inputs[0]));
+                if (src->mesh->F.empty()) throw GeometryError("cut: the object has no surface");
+                // the cutter reaches beyond the object in every direction
+                const Box3 bb = src->mesh->bounds();
+                const cut::Frame fr = cut::frame(spec);
+                const double reach = bb.diagonal() + norm(bb.center() - fr.o) + 1.0;
+                manifold::Polygons polys;
+                try {
+                    for (const auto& poly : cut::region(spec, reach)) {
+                        manifold::SimplePolygon sp;
+                        for (const auto& c : poly) sp.push_back({c[0], c[1]});
+                        polys.push_back(sp);
+                    }
+                } catch (const std::exception& e) {
+                    throw GeometryError(e.what());
+                }
+                // plane: the half-space in front (0 .. reach); others: through the object (-reach .. reach)
+                const bool plane = spec.mode == "plane";
+                Manifold prism;
+                if (spec.has_eye && !plane) {
+                    // perspective: a frustum along the rays from the eye, spanning the
+                    // object's depth range [d1, d2] (Extrude with a scaled top: the 2D
+                    // origin is the eye's foot, so scaling about it follows the rays)
+                    double dmin = INFINITY, dmax = -INFINITY;
+                    for (int c = 0; c < 8; ++c) {
+                        const Vec3 corner{c & 1 ? bb.hi.x : bb.lo.x, c & 2 ? bb.hi.y : bb.lo.y, c & 4 ? bb.hi.z : bb.lo.z};
+                        const double d = dot(corner - spec.eye, fr.n);
+                        dmin = std::min(dmin, d), dmax = std::max(dmax, d);
+                    }
+                    const double d2 = dmax + 1.0, d1 = std::max(dmin - 1.0, 1e-3 * fr.d0);
+                    if (!(d2 > d1)) throw GeometryError("cut: the object lies behind the camera");
+                    manifold::Polygons scaled;
+                    for (const auto& sp : polys) {
+                        manifold::SimplePolygon q;
+                        for (const auto& pt : sp) q.push_back({pt.x * d1 / fr.d0, pt.y * d1 / fr.d0});
+                        scaled.push_back(q);
+                    }
+                    prism = Manifold::Extrude(scaled, d2 - d1, 0, 0.0, manifold::vec2(d2 / d1));
+                    const Vec3 base = spec.eye + fr.n * d1;
+                    prism = prism.Transform(manifold::mat3x4({fr.u.x, fr.u.y, fr.u.z}, {fr.v.x, fr.v.y, fr.v.z},
+                                                             {fr.n.x, fr.n.y, fr.n.z}, {base.x, base.y, base.z}));
+                } else {
+                    prism = Manifold::Extrude(polys, plane ? reach : 2 * reach);
+                    const Vec3 base = plane ? fr.o : fr.o - fr.n * reach;
+                    prism = prism.Transform(manifold::mat3x4({fr.u.x, fr.u.y, fr.u.z}, {fr.v.x, fr.v.y, fr.v.z},
+                                                             {fr.n.x, fr.n.y, fr.n.z}, {base.x, base.y, base.z}));
+                }
+                // only the cutter inside the object's box (plus a margin) matters: clip it
+                // (the far extensions would otherwise dominate voxelizing it for clay)
+                {
+                    const double m = 1.0 + (src->grid ? 4 * src->grid->h() : 0.0);
+                    const Vec3 lo = bb.lo - Vec3{m, m, m}, hi = bb.hi + Vec3{m, m, m};
+                    prism = prism ^ Manifold::Cube({hi.x - lo.x, hi.y - lo.y, hi.z - lo.z}).Translate({lo.x, lo.y, lo.z});
+                }
+                const bool keep_region = cut::keeps_region(spec);
+                if (src->solid && !src->grid) {
+                    Manifold r = keep_region ? *src->solid ^ prism : *src->solid - prism;
+                    if (r.NumTri() == 0) throw GeometryError("cut: nothing of the object is left on the kept side");
+                    return from_manifold(std::move(r));
+                }
+                // clay and non-manifold meshes (imported minis): cut in SDF space
+                auto cutter = std::make_shared<Shape>();
+                cutter->mesh = extract(prism);
+                cutter->solid = std::make_shared<Manifold>(prism);
+                auto out = shape_from_grid(std::make_shared<const sdf::Grid>(
+                    grid_boolean(*src, *cutter, keep_region ? BoolOp::Intersection : BoolOp::Difference)));
+                if (out->mesh->F.empty()) throw GeometryError("cut: nothing of the object is left on the kept side");
+                return out;
+            }
             case NodeKind::Model: {
                 const auto& A = *n->model;
                 const double height = get(n, "height");
@@ -1364,7 +1479,8 @@ std::string brep_json(const NodePtr& root, const VariableResolver& vars, const E
                                 "mesh-to-solid conversion arrives with the repair tools (M5)");
         if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::Sculpt ||
             n->kind == NodeKind::Figure || n->kind == NodeKind::MiniBase || n->kind == NodeKind::Model ||
-            n->kind == NodeKind::Weapon || n->kind == NodeKind::Attach || is_mesh_primitive(n->kind))
+            n->kind == NodeKind::Weapon || n->kind == NodeKind::Attach || n->kind == NodeKind::Cut ||
+            is_mesh_primitive(n->kind))
             throw GeometryError(std::string(node_kind_name(n->kind)) +
                                 " produces mesh geometry; exact features (fillet, chamfer, shell, extrude, ...) cannot be "
                                 "applied on top of it. Apply the exact features first, then combine with the " +

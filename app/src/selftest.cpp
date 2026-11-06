@@ -335,6 +335,78 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     }
     add("back to Design (mini)", [this] { app_->setMode("Design"); }, [this] { return true; });
 
+    // 18) Toolbox cut tools on a 20 x 20 x 10 mm box (top view: screen x/y = world x/y)
+    add("cut tools: box", [this] {
+        app_->setMode("Design");
+        app_->setSelection({});
+        for (const auto& o : app_->objects())
+            if (o.toMap()["visible"].toBool()) app_->toggleVisible(o.toMap()["name"].toString());
+        app_->execute("show(box(x=20*mm, y=20*mm, z=10*mm), name=\"CutBox\")", "ui");
+    }, [this] { return idle() && hasObject("CutBox"); }, 30000);
+    add("orthographic camera (parallel cuts: exact expected volumes)", [this] { app_->requestView("ortho"); },
+        [this] { return idle() && view_->ortho(); });
+    add("top view on the box", [this] { app_->requestView("top"); },
+        [this] { return idle() && std::abs(view_->camForward().z() + 1.0f) < 1e-3f; });
+    add("frame the box", [this] { view_->frameAll(); }, [this] { return idle(); });
+    add("knife from the toolbox", [this] { clickItem("tool_knife"); },
+        [this] { return view_->tool() == "cut" && view_->cutKind() == "knife"; });
+    add("knife: path across, Enter", [this] {
+        click(project(0, -11, 10));  // just beyond the box (frame-all fits it tightly)
+        click(project(0, 11, 10));
+        key(Qt::Key_Return);
+        mouseMove(project(5, 0, 10));
+    }, [this] { return view_->cutChoosing() && view_->cutHover() >= 0; });
+    add("screenshot knife preview", [this] { screenshot("16_knife"); });
+    add("knife: click the part to keep", [this] { click(project(5, 0, 10)); }, [this] {
+        auto h = app_->history();
+        return idle() && !h.isEmpty() && h.back().toMap()["source"].toString().startsWith("knife(\"CutBox\"") &&
+               std::abs(objectValue("CutBox", "volume") - 2000) < 1e-6;
+    }, 30000);
+    add("lasso from the toolbox", [this] { clickItem("tool_lasso"); }, [this] { return view_->cutKind() == "lasso"; });
+    add("lasso: drag a loop, keep the outside", [this] {
+        const double sq[5][2] = {{3, -2}, {7, -2}, {7, 2}, {3, 2}, {3, -2}};
+        QPointF a = project(sq[0][0], sq[0][1], 10);
+        mouseMove(a);
+        mousePress(a, Qt::LeftButton);
+        for (int k = 0; k < 4; ++k)
+            for (int i = 1; i <= 8; ++i) {
+                const double t = i / 8.0;
+                mouseMove(project(sq[k][0] + (sq[k + 1][0] - sq[k][0]) * t, sq[k][1] + (sq[k + 1][1] - sq[k][1]) * t, 10), Qt::LeftButton);
+            }
+        mouseRelease(project(3, -2, 10), Qt::LeftButton);
+    }, [this] { return view_->cutChoosing(); });
+    add("lasso: click outside the loop", [this] { click(project(8.5, 6, 10)); }, [this] {
+        auto h = app_->history();
+        return idle() && h.back().toMap()["source"].toString().startsWith("lasso_cut(\"CutBox\"") &&
+               std::abs(objectValue("CutBox", "volume") - (2000 - 160)) < 2;  // 4 x 4 x 10 removed
+    }, 30000);
+    add("drill from the toolbox", [this] { clickItem("tool_drill"); }, [this] { return view_->cutKind() == "drill"; });
+    add("drill: click on the top face", [this] {
+        click(project(5, 7, 10));
+    }, [this] {
+        auto h = app_->history();
+        // d = 2 mm through 10 mm: pi r^2 h = 31.4 mm^3 (48-gon: 31.33)
+        return idle() && h.back().toMap()["source"].toString().startsWith("drill(\"CutBox\"") &&
+               std::abs(objectValue("CutBox", "volume") - (1840 - 31.33)) < 1;
+    }, 30000);
+    add("front view for slicing", [this] { app_->requestView("front"); },
+        [this] { return idle() && std::abs(view_->camForward().y() - 1.0f) < 1e-3f; });
+    add("frame for slicing", [this] { view_->frameAll(); }, [this] { return idle(); });
+    add("slice from the toolbox", [this] { clickItem("tool_slice"); }, [this] { return view_->cutKind() == "slice"; });
+    add("slice: click a height on the front face", [this] {
+        click(project(5, -10, 4));
+        mouseMove(project(5, -10, 8));
+    }, [this] { return view_->cutChoosing() && view_->cutHover() == 1; });
+    add("slice: keep the part above", [this] { click(project(5, -10, 8)); }, [this] {
+        auto h = app_->history();
+        return idle() && h.back().toMap()["source"].toString().startsWith("slice_cut(\"CutBox\"") &&
+               std::abs(objectValue("CutBox", "volume") - 0.6 * (1840 - 31.33)) < 1;
+    }, 30000);
+    add("leave the cut tool", [this] { key(Qt::Key_Escape); }, [this] { return view_->tool() == "select"; });
+    add("iso view on the cut box", [this] { app_->requestView("iso"); view_->frameAll(); }, [this] { return idle(); });
+    add("screenshot cut result", [this] { screenshot("17_cut_result"); });
+    add("perspective again", [this] { app_->requestView("perspective"); }, [this] { return idle() && !view_->ortho(); });
+
     // 14) Studio scenery: sunset, fjord, night (procedural environment pass)
     for (const char* sc : {"sunset", "fjord", "night"}) {
         const QString name = sc;

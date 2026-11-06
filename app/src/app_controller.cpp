@@ -171,6 +171,44 @@ void AppController::attachViewport(ViewportItem* v) {
         return c;
     });
     connect(v, &ViewportItem::sketchDrawn, this, &AppController::onSketchDrawn);
+    // cut tools: one command per cut (all targets in it, one undo step)
+    connect(v, &ViewportItem::cutRequested, this,
+            [this](const QStringList& targets, const QVariantList& path, const QVector3D& dir, const QString& mode,
+                   const QString& keep, const QVariantList& eye) {
+                auto num = [](double x, double q) {  // tidy script numbers: round to q, divide by an exact power of ten
+                    const double inv = std::round(1.0 / q);
+                    return reprDouble(std::round(x * inv) / inv);
+                };
+                auto vec = [&](const QVariantList& c, double q) {
+                    return "(" + num(c[0].toDouble(), q) + ", " + num(c[1].toDouble(), q) + ", " + num(c[2].toDouble(), q) + ")";
+                };
+                const QVariantList d{dir.x(), dir.y(), dir.z()};
+                QStringList lines;
+                for (const auto& t : targets) {
+                    if (mode == "plane") {
+                        lines << "slice_cut(" + pyStr(t) + ", " + vec(path.front().toList(), 1e-4) + ", normal=" + vec(d, 1e-6) +
+                                     ", keep=" + pyStr(keep) + ")";
+                        continue;
+                    }
+                    QStringList pts;
+                    for (const auto& p : path) pts << vec(p.toList(), 1e-4);  // 0.1 um
+                    lines << QString(mode == "lasso" ? "lasso_cut(" : "knife(") + pyStr(t) + ", [" + pts.join(", ") +
+                                 "], direction=" + vec(d, 1e-6) + ", keep=" + pyStr(keep) +
+                                 (eye.size() == 3 ? ", eye=" + vec(eye, 1e-4) : QString()) + ")";
+                }
+                if (!lines.isEmpty()) execute(lines.join("\n"), "ui");
+            });
+    connect(v, &ViewportItem::drillRequested, this,
+            [this](const QString& target, const QVector3D& p, const QVector3D& dir, double dmm) {
+                auto num = [](double x, double q) {
+                    const double inv = std::round(1.0 / q);
+                    return reprDouble(std::round(x * inv) / inv);
+                };
+                execute("drill(" + pyStr(target) + ", (" + num(p.x(), 1e-4) + ", " + num(p.y(), 1e-4) + ", " + num(p.z(), 1e-4) +
+                            "), d=" + reprDouble(dmm) + "*mm, direction=(" + num(dir.x(), 1e-6) + ", " + num(dir.y(), 1e-6) +
+                            ", " + num(dir.z(), 1e-6) + "))",
+                        "ui");
+            });
     // a finished live stroke becomes one sculpt(...) command; its grid is
     // registered first, so the evaluation reuses it instead of re-sculpting
     v->setStrokeDone([this](const QString& object, NodePtr root, std::shared_ptr<const sdf::Grid> grid, sdf::Stroke st) {

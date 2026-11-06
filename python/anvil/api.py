@@ -24,6 +24,7 @@ from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 __all__ = [
     "figure", "mini_base", "pose", "on_base", "unique_name",
     "import_model", "model_file", "model_info", "weapon", "attach", "equip", "merge", "WEAPONS",
+    "cut", "knife", "lasso_cut", "drill", "slice_cut",
     "tube", "prism", "pyramid", "capsule", "rounded_box", "wedge", "ellipsoid", "star",
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
@@ -454,6 +455,95 @@ def merge(*objs, name: str = None) -> Obj:
     out = show(s, name=name or _a.unique_name("Mini"))
     hide(*names)
     return out
+
+
+# --------------------------------------------------------------------------- cut tools
+
+def _num(v) -> float:
+    if isinstance(v, Quantity):
+        return float(_param("x", v, LENGTH)[0])
+    return float(v)
+
+
+def _pts(path) -> str:
+    out = []
+    for p in path:
+        if len(p) != 3:
+            raise ValueError("cut: path points need x, y, z (mm)")
+        out.append(",".join(repr(_num(c)) for c in p))
+    return ";".join(out)
+
+
+def cut(src, path, direction=(0, 0, -1), mode: str = "knife", keep: str = None, eye=None) -> Solid:
+    """Cuts a solid through its whole depth along `direction` (the view
+    direction when drawn on screen). mode 'knife': open path (points in mm),
+    keep 'left' or 'right' of it; 'lasso': closed path, keep 'inside' or
+    'outside'; 'plane': path = [point], keep 'above' or 'below' the plane
+    through it with normal `direction`. The cut face is filled (closed solid).
+    eye (perspective views): the cut follows the rays from this camera
+    position instead of running parallel to `direction`."""
+    if mode not in ("knife", "lasso", "plane"):
+        raise ValueError("cut(): mode must be 'knife', 'lasso' or 'plane'")
+    keep = keep or {"knife": "left", "lasso": "outside", "plane": "above"}[mode]
+    d = ",".join(repr(float(c)) for c in direction)
+    attrs = {"mode": mode, "keep": keep, "path": _pts(path), "dir": d}
+    if eye is not None:
+        attrs["eye"] = ",".join(repr(_num(c)) for c in eye)
+    return Solid(_a.make_feature("cut", [_node(src)], {}, attrs))
+
+
+def _cut_object(obj, path, direction, mode, keep, pair, name, eye=None):
+    """One undo step: the object becomes its kept part; keep='both' adds the
+    other part as a new object."""
+    oname = _name(obj)
+    src = Solid(_a.get(oname))
+    if keep == "both":
+        a, b = pair
+        show(cut(src, path, direction, mode, a, eye), name=oname)
+        return show(cut(src, path, direction, mode, b, eye), name=name or _a.unique_name(oname + "_part"))
+    return show(cut(src, path, direction, mode, keep, eye), name=oname)
+
+
+def knife(obj, path, direction=(0, 0, -1), keep: str = "left", name: str = None, eye=None) -> Obj:
+    """Knife: cuts the object along an open path through its whole depth.
+    keep 'left', 'right' or 'both' (the other part becomes a new object).
+    eye: camera position of a perspective view (the cut follows its rays)."""
+    return _cut_object(obj, path, direction, "knife", keep, ("left", "right"), name, eye)
+
+
+def lasso_cut(obj, path, direction=(0, 0, -1), keep: str = "outside", name: str = None, eye=None) -> Obj:
+    """Lasso: cuts out the region inside a closed path (through the object).
+    keep 'outside' (remove the inside), 'inside' or 'both'. eye: as knife()."""
+    return _cut_object(obj, path, direction, "lasso", keep, ("outside", "inside"), name, eye)
+
+
+def drill(obj, center, d=2 * mm, direction=(0, 0, -1), segments: int = 48) -> Obj:
+    """Drills a round hole of diameter d through the object along `direction`
+    (a lasso cut with a circle, removing the inside)."""
+    import math
+    r = _num(d) / 2
+    c = [_num(v) for v in center]
+    n = [float(v) for v in direction]
+    ln = math.sqrt(sum(v * v for v in n))
+    n = [v / ln for v in n]
+    a = [1.0, 0.0, 0.0] if abs(n[0]) < 0.9 else [0.0, 1.0, 0.0]
+    k = sum(a[i] * n[i] for i in range(3))
+    u = [a[i] - k * n[i] for i in range(3)]
+    lu = math.sqrt(sum(v * v for v in u))
+    u = [v / lu for v in u]
+    v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]]
+    pts = []
+    for i in range(segments):
+        t = 2 * math.pi * i / segments
+        pts.append(tuple(round(c[j] + r * (math.cos(t) * u[j] + math.sin(t) * v[j]), 9) for j in range(3)))
+    return lasso_cut(obj, pts, direction, keep="outside")
+
+
+def slice_cut(obj, point, normal=(0, 0, 1), keep: str = "above", name: str = None) -> Obj:
+    """Slices the object with the plane through `point` (normal `normal`).
+    keep 'above' (the side the normal points to), 'below' or 'both'.
+    Example: slice_cut("Mini", (0, 0, 0.3)) gives a flat bottom at z = 0.3 mm."""
+    return _cut_object(obj, [tuple(point)], normal, "plane", keep, ("above", "below"), name)
 
 
 def unique_name(prefix: str) -> str:

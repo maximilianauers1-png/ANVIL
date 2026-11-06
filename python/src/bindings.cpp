@@ -192,7 +192,7 @@ NodeKind feature_kind(const std::string& k) {
         {"circular_pattern", NodeKind::CircularPattern}, {"loft", NodeKind::Loft}, {"sweep", NodeKind::Sweep},
         {"step", NodeKind::StepImport}, {"solidify", NodeKind::Solidify}, {"deform", NodeKind::Deform},
         {"figure", NodeKind::Figure}, {"mini_base", NodeKind::MiniBase},
-        {"weapon", NodeKind::Weapon}, {"attach", NodeKind::Attach}};
+        {"weapon", NodeKind::Weapon}, {"attach", NodeKind::Attach}, {"cut", NodeKind::Cut}};
     auto it = m.find(k);
     if (it == m.end()) throw std::invalid_argument("unknown feature '" + k + "'");
     return it->second;

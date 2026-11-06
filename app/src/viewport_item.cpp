@@ -333,6 +333,15 @@ QString ViewportItem::toolHint() const {
     }
     if (tool_ == "pick")
         return "Cut with: click the objects to subtract, then Enter or double-click (Esc cancels)";
+    if (tool_ == "cut") {
+        if (cut_.choosing)
+            return "Click the part to KEEP (highlighted under the pointer)  ·  Shift+click: keep both as separate objects  ·  Esc cancels";
+        if (cut_.kind == "knife") return "Knife: click points across the object  ·  Enter/double-click finishes  ·  Backspace undoes  ·  Esc leaves";
+        if (cut_.kind == "line") return "Straight cut: click two points across the object  ·  Esc leaves";
+        if (cut_.kind == "lasso") return "Lasso: drag a loop around the region  ·  Esc leaves";
+        if (cut_.kind == "drill") return "Drill: click where the hole goes (straight through, along the view)  ·  Esc leaves";
+        if (cut_.kind == "slice") return "Slice: click the height of the horizontal cut  ·  Esc leaves";
+    }
     return {};
 }
 
@@ -401,6 +410,10 @@ void ViewportItem::mousePressEvent(QMouseEvent* e) {
         e->accept();
         return;
     }
+    if (e->button() == Qt::LeftButton && tool_ == "cut" && cutPress(e)) {
+        e->accept();
+        return;
+    }
     if (e->button() == Qt::RightButton) {
         hover_pos_ = e->position();
         updateSnap(hover_pos_);
@@ -414,6 +427,10 @@ void ViewportItem::mouseMoveEvent(QMouseEvent* e) {
     QPointF p = e->position();
     if (sculpting_) {
         sculptMove(p);
+        return;
+    }
+    if (tool_ == "cut" && cut_.freehand) {
+        cutMove(p, true);
         return;
     }
     if (drag_button_ == Qt::RightButton && radial_.active()) {
@@ -438,6 +455,11 @@ void ViewportItem::mouseMoveEvent(QMouseEvent* e) {
 void ViewportItem::mouseReleaseEvent(QMouseEvent* e) {
     if (sculpting_ && e->button() == Qt::LeftButton) {
         sculptRelease();
+        drag_button_ = Qt::NoButton;
+        return;
+    }
+    if (tool_ == "cut" && e->button() == Qt::LeftButton && cutRelease(e)) {
+        dragging_ = false;
         drag_button_ = Qt::NoButton;
         return;
     }
@@ -491,6 +513,13 @@ void ViewportItem::mouseDoubleClickEvent(QMouseEvent* e) {
         drawClick(true);
         return;
     }
+    if (tool_ == "cut") {
+        if (cut_.kind == "knife" && !cut_.choosing) {
+            finishCutPath();
+            cut_.skip_release = true;
+        }
+        return;
+    }
     if (tool_ == "pick") {
         finishPick();
         return;
@@ -508,6 +537,7 @@ void ViewportItem::hoverMoveEvent(QHoverEvent* e) {
         return;
     }
     if (tool_ == "draw") drawMove(hover_pos_);
+    else if (tool_ == "cut") cutMove(hover_pos_, false);
     else if (tool_ == "sculpt") sculptHover(hover_pos_);
     else updateSnap(hover_pos_);
 }
@@ -562,6 +592,10 @@ void ViewportItem::startMoveTool() {
 
 void ViewportItem::cancelTool() {
     bool was_draw = tool_ == "draw";
+    if (tool_ == "cut") {
+        cut_ = Cut{};
+        emit cutChanged();
+    }
     tool_ = "select";
     base_.reset();
     picked_tools_.clear();

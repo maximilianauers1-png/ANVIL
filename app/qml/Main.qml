@@ -60,6 +60,12 @@ ApplicationWindow {
                     Keys.onPressed: (e) => {
                         if (drawOverlay.handleKey(e)) {
                             e.accepted = true
+                        } else if (viewport.tool === "cut" && (e.key === Qt.Key_Return || e.key === Qt.Key_Enter)) {
+                            viewport.finishCutPath()
+                            e.accepted = true
+                        } else if (viewport.tool === "cut" && e.key === Qt.Key_Backspace) {
+                            viewport.cutUndoPoint()
+                            e.accepted = true
                         } else if (viewport.tool === "pick" && (e.key === Qt.Key_Return || e.key === Qt.Key_Enter)) {
                             viewport.finishPick()
                             e.accepted = true
@@ -86,16 +92,24 @@ ApplicationWindow {
                 }
                 SnapOverlay { anchors.fill: parent; view: viewport }
                 DrawOverlay { id: drawOverlay; anchors.fill: parent; view: viewport }
-                MiniPanel {
+                CutOverlay { anchors.fill: parent; view: viewport }
+                ToolBox {
+                    id: toolBox
                     anchors.left: parent.left
                     anchors.top: parent.top
-                    anchors.margins: Theme.unit * 2
+                    anchors.margins: Theme.unit
+                    view: viewport
+                }
+                MiniPanel {
+                    anchors.left: toolBox.right
+                    anchors.top: parent.top
+                    anchors.margins: Theme.unit
                     visible: App.mode === "Mini"
                 }
                 SculptPanel {
-                    anchors.left: parent.left
+                    anchors.left: toolBox.right
                     anchors.top: parent.top
-                    anchors.margins: Theme.unit * 2
+                    anchors.margins: Theme.unit
                     view: viewport
                     visible: viewport.sculptMode
                 }

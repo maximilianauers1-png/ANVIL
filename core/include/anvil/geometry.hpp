@@ -58,6 +58,7 @@ enum class NodeKind {
     Model,         // imported mini (glTF/OBJ/STL) with rig; height + pose angles; posed mesh (DQS)
     Weapon,        // parametric accessory (sword, zweihander, buster sword, ...); attr "type"; clay (SDF)
     Attach,        // in: item, model; places the item in the model's posed hand; attr "hand" ("r"/"l")
+    Cut,           // in: solid; knife / lasso / plane cut through the whole object (cut.hpp); attrs mode, keep, path, dir
 };
 /// True for the primitives evaluated only by the mesh kernel (no exact form).
 bool is_mesh_primitive(NodeKind k);

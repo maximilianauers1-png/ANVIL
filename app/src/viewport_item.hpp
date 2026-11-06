@@ -57,6 +57,14 @@ class ViewportItem : public QQuickItem {
     // tools
     Q_PROPERTY(QString tool READ tool NOTIFY toolChanged)
     Q_PROPERTY(QString toolHint READ toolHint NOTIFY toolChanged)
+    // cut tools (knife, line, lasso, drill, slice)
+    Q_PROPERTY(QString cutKind READ cutKind NOTIFY cutChanged)
+    Q_PROPERTY(QVariantList cutPoints READ cutPoints NOTIFY cutChanged)
+    Q_PROPERTY(QPointF cutCursor READ cutCursor NOTIFY cutChanged)
+    Q_PROPERTY(bool cutChoosing READ cutChoosing NOTIFY cutChanged)
+    Q_PROPERTY(QVariantList cutRegion READ cutRegion NOTIFY cutChanged)
+    Q_PROPERTY(int cutHover READ cutHover NOTIFY cutChanged)
+    Q_PROPERTY(double drillDiameter MEMBER drill_d_ NOTIFY cutChanged)
     Q_PROPERTY(bool hasBasePoint READ hasBasePoint NOTIFY toolChanged)
     Q_PROPERTY(QPointF basePos READ basePos NOTIFY snapChanged)
     // drawing tool (polyline / rectangle / circle on a plane)
@@ -188,6 +196,17 @@ class ViewportItem : public QQuickItem {
     Q_INVOKABLE QVariant planePoint(double x, double y, const QString& plane, double offset) const;
     Q_INVOKABLE QString pickSketchAt(double x, double y) const;
     Q_INVOKABLE void cancelTool();
+    /// kind: knife (click points, Enter), line (two clicks), lasso (drag a loop),
+    /// drill (click a point), slice (click a height). Then click the part to keep.
+    Q_INVOKABLE void startCut(const QString& kind);
+    Q_INVOKABLE void finishCutPath();
+    Q_INVOKABLE void cutUndoPoint();
+    QString cutKind() const { return tool_ == "cut" ? cut_.kind : QString(); }
+    QVariantList cutPoints() const;
+    QPointF cutCursor() const { return cut_.cursor; }
+    bool cutChoosing() const { return cut_.choosing; }
+    QVariantList cutRegion() const { return cut_.region_screen; }
+    int cutHover() const { return cut_.hover; }
     Q_INVOKABLE void radialBegin(QString context);  // at the current pointer position
     Q_INVOKABLE void radialEnd();
     Q_INVOKABLE void radialCancel();
@@ -196,6 +215,11 @@ class ViewportItem : public QQuickItem {
     Q_INVOKABLE void runBenchmark(int frames, const QString& outPath);
 
   signals:
+    void cutChanged();
+    /// A finished cut: targets, world path, direction, mode, keep (left/right/inside/outside/above/below/both).
+    void cutRequested(const QStringList& targets, const QVariantList& path, const QVector3D& dir, const QString& mode,
+                      const QString& keep, const QVariantList& eye);
+    void drillRequested(const QString& target, const QVector3D& point, const QVector3D& dir, double d);
     void styleChanged();
     void selectionChanged();
     void snapChanged();
@@ -267,6 +291,28 @@ class ViewportItem : public QQuickItem {
     bool dragging_ = false;
     QString tool_ = "select";
     // drawing
+    struct Cut {
+        QString kind;
+        std::vector<QPointF> pts;    // screen points of the path
+        QPointF cursor{-1e6, -1e6};
+        bool freehand = false;       // lasso drag in progress
+        bool choosing = false;       // path done: click the part to keep
+        bool skip_release = false;   // ignore the release after a double-click
+        int hover = -1;              // 1: pointer over the region side, 0: other side
+        QStringList targets;
+        Vec3 plane_o, plane_n;       // plane of the path (through the targets, normal = view)
+        std::optional<Vec3> eye;     // perspective view: the cut follows the camera rays
+        std::vector<Vec3> world;     // path on that plane
+        double reach = 0;
+        QVariantList region_screen;  // region polygons projected (preview)
+    } cut_;
+    double drill_d_ = 2.0;
+    std::optional<std::pair<std::string, Vec3>> rayPick(QPointF pos) const;
+    bool cutPress(QMouseEvent* e);
+    bool cutMove(QPointF pos, bool dragging);
+    bool cutRelease(QMouseEvent* e);
+    void cutEnterChoosing();
+    QString cutModeOf() const;
     struct Draw {
         QString kind;
         bool have_plane = false;
