@@ -60,3 +60,21 @@ sculpt("Kopf", "smooth", [(-3, 0, 10), (3, 0, 10)], radius=3*mm, strength=1.0)
 subtract("Kopf", cylinder(d=5.1*mm, h=2.2*mm).translate(z=-10*mm))
 export_stl("Kopf", "kopf.stl")
 ```
+
+## 5. Mehr Grundformen (Design-Modus)
+
+Radial über leerem Raum → **Shapes ▸**: Kugel, Rohr, Kegel, Sechskant-Prisma,
+Torus, Kapsel, abgerundeter Quader, **More ▸** (Pyramide, Keil, Ellipsoid,
+Stern, STL-/STEP-Import). Alle sind parametrisch: Werte im Panel tippen oder
+am Namen ziehen.
+
+| Befehl | Form |
+|---|---|
+| `tube(d, d_in, h)` | Rohr / Ring / Hülse |
+| `prism(n, d, h)` | regelmäßiges n-Eck-Prisma (n = 6: Sechskant), d über Ecken |
+| `pyramid(n, d, h)` | Pyramide mit n-eckiger Grundfläche |
+| `capsule(d, h)` | Zylinder mit Halbkugel-Enden |
+| `rounded_box(x, y, z, r)` | Quader mit Radius r an allen Kanten |
+| `wedge(x, y, z)` | Keil / Rampe |
+| `ellipsoid(x, y, z)` | Ellipsoid (Durchmesser) |
+| `star(n, d, d_in, h)` | Sternprisma |

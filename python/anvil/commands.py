@@ -128,6 +128,20 @@ def _(ctx):
     return _at("cone(d=20*mm, d2=0*mm, h=20*mm)", ctx)
 
 
+for _id, _label, _src, _kw in (
+        ("tube", "Tube", "tube(d=20*mm, d_in=16*mm, h=10*mm)", "pipe ring sleeve hollow"),
+        ("prism", "Hex prism", "prism(n=6, d=20*mm, h=10*mm)", "hexagon nut polygon prism"),
+        ("pyramid", "Pyramid", "pyramid(n=4, d=20*mm, h=15*mm)", "spike obelisk"),
+        ("capsule", "Capsule", "capsule(d=10*mm, h=30*mm)", "pill rod"),
+        ("rounded_box", "Rounded box", "rounded_box(x=20*mm, y=20*mm, z=10*mm, r=2*mm)", "fillet block soft"),
+        ("wedge", "Wedge", "wedge(x=20*mm, y=10*mm, z=10*mm)", "ramp slope"),
+        ("ellipsoid", "Ellipsoid", "ellipsoid(x=30*mm, y=20*mm, z=10*mm)", "egg oval"),
+        ("star", "Star", "star(n=5, d=30*mm, d_in=14*mm, h=4*mm)", "emblem")):
+    registry.add(Command(id=f"create.{_id}", label=_label, category="Create",
+                         help=f"{_label} on the snapped point ({_src.split('(')[1].rstrip(')')})", keywords=_kw,
+                         build=(lambda src: (lambda ctx: _at(src, ctx)))(_src)))
+
+
 @command("boolean.subtract", "Subtract", "Boolean",
          "First selected object minus the others (the others are consumed)", min_selection=2,
          keywords="difference cut minus")
@@ -325,8 +339,10 @@ def _(ctx):
 # never removed or reordered (muscle memory).
 _VIEW = {"submenu": "View", "items": ["view.right", "view.iso", "view.top", "view.bottom", "view.left",
                                       "view.ortho", "view.front", "view.frame"]}
-_MORE = {"submenu": "More", "items": ["create.sphere", "create.torus", "create.cone", "file.import_stl",
-                                      "file.import_step", "", "", ""]}
+_MORE2 = {"submenu": "More", "items": ["create.pyramid", "create.wedge", "create.ellipsoid", "create.star",
+                                       "file.import_stl", "file.import_step", "", ""]}
+_MORE = {"submenu": "Shapes", "items": ["create.sphere", "create.tube", "create.cone", "create.prism",
+                                       "create.torus", "create.capsule", "create.rounded_box", _MORE2]}
 _EDIT = {"submenu": "Edit", "items": ["edit.fillet", "edit.shell", "edit.chamfer", "edit.duplicate", "edit.hide",
                                       "boolean.union", "boolean.intersect", ""]}
 _BRUSHES_MORE = {"submenu": "Brushes", "items": ["sculpt.inflate", "sculpt.crease", "sculpt.pinch", "sculpt.flatten",

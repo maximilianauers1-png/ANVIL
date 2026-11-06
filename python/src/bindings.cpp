@@ -54,6 +54,14 @@ NodeKind kind_from(const std::string& s) {
     if (s == "cylinder") return NodeKind::Cylinder;
     if (s == "sphere") return NodeKind::Sphere;
     if (s == "torus") return NodeKind::Torus;
+    if (s == "tube") return NodeKind::Tube;
+    if (s == "prism") return NodeKind::Prism;
+    if (s == "pyramid") return NodeKind::Pyramid;
+    if (s == "capsule") return NodeKind::Capsule;
+    if (s == "rounded_box") return NodeKind::RoundedBox;
+    if (s == "wedge") return NodeKind::Wedge;
+    if (s == "ellipsoid") return NodeKind::Ellipsoid;
+    if (s == "star") return NodeKind::Star;
     throw std::invalid_argument("unknown primitive '" + s + "'");
 }
 

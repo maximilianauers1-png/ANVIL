@@ -49,7 +49,11 @@ enum class NodeKind {
     Deform,        // in: solid; stretch / taper / twist / bend (mesh kernel)
     // M3
     Sculpt,        // in: solid; voxel size + sculpt strokes on its SDF (sparse bricks)
+    // more primitives (mesh kernel; z = 0 is the base, centred on X/Y unless noted)
+    Tube, Prism, Pyramid, Capsule, RoundedBox, Wedge, Ellipsoid, Star,
 };
+/// True for the primitives evaluated only by the mesh kernel (no exact form).
+bool is_mesh_primitive(NodeKind k);
 enum class BoolOp { Union, Difference, Intersection };
 
 const char* node_kind_name(NodeKind k);  // "Box", "Cylinder", ...

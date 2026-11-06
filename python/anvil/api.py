@@ -22,6 +22,7 @@ from .sketch import Sketch
 from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 
 __all__ = [
+    "tube", "prism", "pyramid", "capsule", "rounded_box", "wedge", "ellipsoid", "star",
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
     "subtract", "union", "intersect", "duplicate", "clear", "export_stl", "import_stl", "import_mesh",
@@ -47,6 +48,14 @@ _PARAM_DIMS = {
     "cylinder": {"d": LENGTH, "h": LENGTH, "d2": LENGTH, "chamfer_top": LENGTH, "chamfer_bottom": LENGTH},
     "sphere": {"d": LENGTH},
     "torus": {"R": LENGTH, "r": LENGTH},
+    "tube": {"d": LENGTH, "d_in": LENGTH, "h": LENGTH},
+    "prism": {"n": NONE, "d": LENGTH, "h": LENGTH},
+    "pyramid": {"n": NONE, "d": LENGTH, "h": LENGTH},
+    "capsule": {"d": LENGTH, "h": LENGTH},
+    "rounded_box": {"x": LENGTH, "y": LENGTH, "z": LENGTH, "r": LENGTH},
+    "wedge": {"x": LENGTH, "y": LENGTH, "z": LENGTH},
+    "ellipsoid": {"x": LENGTH, "y": LENGTH, "z": LENGTH},
+    "star": {"n": NONE, "d": LENGTH, "d_in": LENGTH, "h": LENGTH},
     "transform": {"tx": LENGTH, "ty": LENGTH, "tz": LENGTH, "rx": ANGLE, "ry": ANGLE, "rz": ANGLE},
 }
 
@@ -235,6 +244,46 @@ def sphere(d=None, *, r=None) -> Solid:
 def torus(R=20 * mm, r=5 * mm) -> Solid:
     """Torus around the Z axis, centered at the origin."""
     return Solid(_a.make_primitive("torus", _params("torus", {"R": R, "r": r})))
+
+
+def tube(d=20 * mm, d_in=16 * mm, h=10 * mm) -> Solid:
+    """Hollow cylinder (pipe, ring, sleeve) on z = 0."""
+    return Solid(_a.make_primitive("tube", _params("tube", {"d": d, "d_in": d_in, "h": h})))
+
+
+def prism(n=6, d=20 * mm, h=10 * mm) -> Solid:
+    """Regular n-sided prism (hexagon nut blank, triangle...), d across corners."""
+    return Solid(_a.make_primitive("prism", _params("prism", {"n": n, "d": d, "h": h})))
+
+
+def pyramid(n=4, d=20 * mm, h=15 * mm) -> Solid:
+    """Pyramid with a regular n-sided base on z = 0, apex at z = h."""
+    return Solid(_a.make_primitive("pyramid", _params("pyramid", {"n": n, "d": d, "h": h})))
+
+
+def capsule(d=10 * mm, h=30 * mm) -> Solid:
+    """Cylinder with hemispherical ends, total height h, standing on z = 0."""
+    return Solid(_a.make_primitive("capsule", _params("capsule", {"d": d, "h": h})))
+
+
+def rounded_box(x=20 * mm, y=20 * mm, z=10 * mm, r=2 * mm) -> Solid:
+    """Box with all edges and corners rounded by r, centred on X/Y, on z = 0."""
+    return Solid(_a.make_primitive("rounded_box", _params("rounded_box", {"x": x, "y": y, "z": z, "r": r})))
+
+
+def wedge(x=20 * mm, y=10 * mm, z=10 * mm) -> Solid:
+    """Ramp: right triangle in XZ (height z at -X down to 0 at +X), width y."""
+    return Solid(_a.make_primitive("wedge", _params("wedge", {"x": x, "y": y, "z": z})))
+
+
+def ellipsoid(x=30 * mm, y=20 * mm, z=10 * mm) -> Solid:
+    """Ellipsoid with the given diameters, centred at the origin."""
+    return Solid(_a.make_primitive("ellipsoid", _params("ellipsoid", {"x": x, "y": y, "z": z})))
+
+
+def star(n=5, d=30 * mm, d_in=14 * mm, h=4 * mm) -> Solid:
+    """Star prism with n points (first tip on +Y), on z = 0."""
+    return Solid(_a.make_primitive("star", _params("star", {"n": n, "d": d, "d_in": d_in, "h": h})))
 
 
 def transform(s, tx=None, ty=None, tz=None, rx=None, ry=None, rz=None) -> Solid:

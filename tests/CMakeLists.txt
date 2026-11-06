@@ -53,3 +53,8 @@ add_executable(anvil-sculpt-bench ${PROJECT_SOURCE_DIR}/bench/sculpt_bench.cpp)
 target_link_libraries(anvil-sculpt-bench PRIVATE anvil_core)
 anvil_warnings(anvil-sculpt-bench)
 install(TARGETS anvil-sculpt-bench RUNTIME DESTINATION . COMPONENT anvil)
+
+# Additional primitives (tube, prism, pyramid, capsule, rounded box, wedge, ellipsoid, star)
+add_test(NAME acceptance_shapes
+         COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/shapes_suite.py)
+set_tests_properties(acceptance_shapes PROPERTIES PASS_REGULAR_EXPRESSION "SHAPES OK")

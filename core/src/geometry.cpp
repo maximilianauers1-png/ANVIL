@@ -41,6 +41,14 @@ const char* node_kind_name(NodeKind k) {
         case NodeKind::Solidify: return "Solidify";
         case NodeKind::Deform: return "Deform";
         case NodeKind::Sculpt: return "Sculpt";
+        case NodeKind::Tube: return "Tube";
+        case NodeKind::Prism: return "Prism";
+        case NodeKind::Pyramid: return "Pyramid";
+        case NodeKind::Capsule: return "Capsule";
+        case NodeKind::RoundedBox: return "RoundedBox";
+        case NodeKind::Wedge: return "Wedge";
+        case NodeKind::Ellipsoid: return "Ellipsoid";
+        case NodeKind::Star: return "Star";
     }
     return "?";
 }
@@ -98,8 +106,49 @@ const std::vector<ParamSpec>& param_specs(NodeKind k) {
         {"taper", kNone, 1, true, false, "XY scale at the top relative to the bottom"},
         {"twist", kAngle, 0, false, false, "rotation of the top relative to the bottom (about Z)"},
         {"bend", kAngle, 0, false, false, "bend angle in the XZ plane over the X length"}};
+    static const std::vector<ParamSpec> tube{
+        {"d", kLength, 20, true, false, "outer diameter"},
+        {"d_in", kLength, 16, true, false, "inner diameter (bore)"},
+        {"h", kLength, 10, true, false, "height"}};
+    static const std::vector<ParamSpec> prism{
+        {"n", kNone, 6, true, false, "number of sides (3 = triangle, 6 = hexagon)"},
+        {"d", kLength, 20, true, false, "diameter across corners"},
+        {"h", kLength, 10, true, false, "height"}};
+    static const std::vector<ParamSpec> pyramid{
+        {"n", kNone, 4, true, false, "number of base sides"},
+        {"d", kLength, 20, true, false, "base diameter across corners"},
+        {"h", kLength, 15, true, false, "height to the apex"}};
+    static const std::vector<ParamSpec> capsule{
+        {"d", kLength, 10, true, false, "diameter"},
+        {"h", kLength, 30, true, false, "total height (>= d)"}};
+    static const std::vector<ParamSpec> rbox{
+        {"x", kLength, 20, true, false, "size along X"},
+        {"y", kLength, 20, true, false, "size along Y"},
+        {"z", kLength, 10, true, false, "size along Z (height)"},
+        {"r", kLength, 2, true, false, "edge radius (< half the smallest size)"}};
+    static const std::vector<ParamSpec> wedge{
+        {"x", kLength, 20, true, false, "length along X (ramp runs from +X down to -X)"},
+        {"y", kLength, 10, true, false, "width along Y"},
+        {"z", kLength, 10, true, false, "height at -X"}};
+    static const std::vector<ParamSpec> ell{
+        {"x", kLength, 30, true, false, "diameter along X"},
+        {"y", kLength, 20, true, false, "diameter along Y"},
+        {"z", kLength, 10, true, false, "diameter along Z"}};
+    static const std::vector<ParamSpec> star{
+        {"n", kNone, 5, true, false, "number of points"},
+        {"d", kLength, 30, true, false, "outer diameter (tips)"},
+        {"d_in", kLength, 14, true, false, "inner diameter (notches)"},
+        {"h", kLength, 4, true, false, "height"}};
     static const std::vector<ParamSpec> none;
     switch (k) {
+        case NodeKind::Tube: return tube;
+        case NodeKind::Prism: return prism;
+        case NodeKind::Pyramid: return pyramid;
+        case NodeKind::Capsule: return capsule;
+        case NodeKind::RoundedBox: return rbox;
+        case NodeKind::Wedge: return wedge;
+        case NodeKind::Ellipsoid: return ell;
+        case NodeKind::Star: return star;
         case NodeKind::Extrude: return extrude;
         case NodeKind::Revolve: return revolve;
         case NodeKind::Fillet: return fillet;
@@ -140,6 +189,16 @@ std::map<std::string, Param> with_defaults(NodeKind k, std::map<std::string, Par
     return p;
 }
 }  // namespace
+
+bool is_mesh_primitive(NodeKind k) {
+    switch (k) {
+        case NodeKind::Tube: case NodeKind::Prism: case NodeKind::Pyramid: case NodeKind::Capsule:
+        case NodeKind::RoundedBox: case NodeKind::Wedge: case NodeKind::Ellipsoid: case NodeKind::Star:
+            return true;
+        default:
+            return false;
+    }
+}
 
 bool is_brep_kind(NodeKind k) {
     switch (k) {
@@ -403,6 +462,14 @@ std::string to_python(const NodePtr& n) {
     };
     switch (n->kind) {
         case NodeKind::Box: o << "box("; args(n->kind, false); o << ")"; break;
+        case NodeKind::Tube: o << "tube("; args(n->kind, false); o << ")"; break;
+        case NodeKind::Prism: o << "prism("; args(n->kind, false); o << ")"; break;
+        case NodeKind::Pyramid: o << "pyramid("; args(n->kind, false); o << ")"; break;
+        case NodeKind::Capsule: o << "capsule("; args(n->kind, false); o << ")"; break;
+        case NodeKind::RoundedBox: o << "rounded_box("; args(n->kind, false); o << ")"; break;
+        case NodeKind::Wedge: o << "wedge("; args(n->kind, false); o << ")"; break;
+        case NodeKind::Ellipsoid: o << "ellipsoid("; args(n->kind, false); o << ")"; break;
+        case NodeKind::Star: o << "star("; args(n->kind, false); o << ")"; break;
         case NodeKind::Cylinder: o << "cylinder("; args(n->kind, true); o << ")"; break;
         case NodeKind::Sphere: o << "sphere("; args(n->kind, false); o << ")"; break;
         case NodeKind::Torus: o << "torus("; args(n->kind, false); o << ")"; break;
@@ -592,7 +659,7 @@ struct Evaluator {
     // Mesh-only features (Solidify, Deform, imported meshes) have no exact form.
     bool has_mesh_only(const NodePtr& n) {
         if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::ImportedMesh ||
-            n->kind == NodeKind::Sculpt)
+            n->kind == NodeKind::Sculpt || is_mesh_primitive(n->kind))
             return true;
         if (n->kind == NodeKind::Ref) {
             RefGuard g(ref_depth);
@@ -885,6 +952,75 @@ struct Evaluator {
                 return from_manifold(m.Transform(T));
             }
             case NodeKind::Sculpt: return compute_sculpt(n);
+            case NodeKind::Tube: {
+                const double d = get(n, "d"), di = get(n, "d_in"), h = get(n, "h");
+                if (di >= d) throw GeometryError("Tube: d_in (" + repr_double(di) + " mm) must be smaller than d (" + repr_double(d) + " mm)");
+                manifold::SimplePolygon ring{{di / 2, 0}, {d / 2, 0}, {d / 2, h}, {di / 2, h}};
+                return from_manifold(Manifold::Revolve({ring}, circle_segments(d / 2, set.chord_mm)));
+            }
+            case NodeKind::Prism: case NodeKind::Pyramid: {
+                const double nn = get(n, "n"), d = get(n, "d"), h = get(n, "h");
+                if (nn < 3 || nn > 1000 || nn != std::floor(nn))
+                    throw GeometryError(std::string(node_kind_name(n->kind)) + ": n must be a whole number of sides >= 3");
+                return from_manifold(Manifold::Cylinder(h, d / 2, n->kind == NodeKind::Pyramid ? 0.0 : d / 2, int(nn)));
+            }
+            case NodeKind::Capsule: {
+                const double d = get(n, "d"), h = get(n, "h"), r = d / 2;
+                if (h < d) throw GeometryError("Capsule: h (" + repr_double(h) + " mm) must be at least d (" + repr_double(d) + " mm)");
+                // half profile: quarter circle, straight side, quarter circle (each direction chord/2: doubly curved)
+                const int nm = circle_segments(r, set.chord_mm / 2);
+                manifold::SimplePolygon c{{0, 0}};
+                for (int i = 1; i < nm / 4; ++i) {
+                    const double a = -std::numbers::pi / 2 + 2 * std::numbers::pi * i / nm;
+                    c.push_back({r * std::cos(a), r + r * std::sin(a)});
+                }
+                c.push_back({r, r});
+                c.push_back({r, h - r});
+                for (int i = 1; i < nm / 4; ++i) {
+                    const double a = 2 * std::numbers::pi * i / nm;
+                    c.push_back({r * std::cos(a), h - r + r * std::sin(a)});
+                }
+                c.push_back({0, h});
+                return from_manifold(Manifold::Revolve({c}, nm));
+            }
+            case NodeKind::RoundedBox: {
+                const double x = get(n, "x"), y = get(n, "y"), z = get(n, "z"), r = get(n, "r");
+                if (2 * r >= std::min({x, y, z}))
+                    throw GeometryError("RoundedBox: r (" + repr_double(r) + " mm) must be less than half the smallest size");
+                // Minkowski sum of a box and a sphere = convex hull of 8 corner spheres
+                const Manifold ball = Manifold::Sphere(r, circle_segments(r, set.chord_mm / 2));
+                std::vector<Manifold> corners;
+                for (int i = 0; i < 8; ++i)
+                    corners.push_back(ball.Translate({(i & 1 ? 1 : -1) * (x / 2 - r), (i & 2 ? 1 : -1) * (y / 2 - r),
+                                                      i & 4 ? z - r : r}));
+                return from_manifold(Manifold::Hull(corners));
+            }
+            case NodeKind::Wedge: {
+                const double x = get(n, "x"), y = get(n, "y"), z = get(n, "z");
+                // right triangle in the XZ plane (extruded along Y, centred)
+                manifold::SimplePolygon tri{{-x / 2, 0}, {x / 2, 0}, {-x / 2, z}};
+                return from_manifold(Manifold::Extrude({tri}, y).Rotate(90, 0, 0).Translate({0, y / 2, 0}));
+            }
+            case NodeKind::Ellipsoid: {
+                const double x = get(n, "x"), y = get(n, "y"), z = get(n, "z");
+                const double big = std::max({x, y, z}) / 2, small = std::min({x, y, z}) / 2;
+                // scaling a unit sphere stretches facets by big/small: tessellate the sphere finer by that factor
+                const int nm = circle_segments(big, set.chord_mm / 2 * small / big);
+                return from_manifold(Manifold::Sphere(1.0, nm).Scale({x / 2, y / 2, z / 2}).Translate({0, 0, 0}));
+            }
+            case NodeKind::Star: {
+                const double nn = get(n, "n"), d = get(n, "d"), di = get(n, "d_in"), h = get(n, "h");
+                if (nn < 3 || nn > 1000 || nn != std::floor(nn)) throw GeometryError("Star: n must be a whole number >= 3");
+                if (di >= d) throw GeometryError("Star: d_in must be smaller than d");
+                manifold::SimplePolygon poly;
+                const int k = int(nn);
+                for (int i = 0; i < 2 * k; ++i) {
+                    const double a = std::numbers::pi / 2 + std::numbers::pi * i / k;  // first tip on +Y
+                    const double rr = (i % 2 ? di : d) / 2;
+                    poly.push_back({rr * std::cos(a), rr * std::sin(a)});
+                }
+                return from_manifold(Manifold::Extrude({poly}, h));
+            }
             case NodeKind::Deform: {
                 auto src = solid_shape(eval(n->inputs[0]));
                 if (!src->solid) throw GeometryError("deform source is not a closed manifold: " + src->error);
@@ -969,7 +1105,8 @@ std::string brep_json(const NodePtr& root, const VariableResolver& vars, const E
         if (n->kind == NodeKind::ImportedMesh)
             throw GeometryError("an imported mesh cannot be combined with B-Rep features (fillet, extrude, ...); "
                                 "mesh-to-solid conversion arrives with the repair tools (M5)");
-        if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::Sculpt)
+        if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::Sculpt ||
+            is_mesh_primitive(n->kind))
             throw GeometryError(std::string(node_kind_name(n->kind)) +
                                 " produces mesh geometry; exact features (fillet, chamfer, shell, extrude, ...) cannot be "
                                 "applied on top of it. Apply the exact features first, then combine with the " +
@@ -1106,6 +1243,17 @@ AnalyticFeatures analytic_features(const NodePtr& root, const VariableResolver& 
                     break;
                 }
                 case NodeKind::ImportedMesh: break;
+                case NodeKind::Tube: case NodeKind::Prism: case NodeKind::Pyramid: case NodeKind::Capsule:
+                case NodeKind::RoundedBox: case NodeKind::Star: {
+                    // base centre, top centre (snapping)
+                    double top = n->params.count("h") ? ev.get(n, "h") : ev.get(n, "z");
+                    out.centers.push_back(A.apply({0, 0, 0}));
+                    out.centers.push_back(A.apply({0, 0, top}));
+                    if (n->kind == NodeKind::Tube) circle(ev.get(n, "d_in") / 2, 0), circle(ev.get(n, "d_in") / 2, top);
+                    break;
+                }
+                case NodeKind::Ellipsoid: out.centers.push_back(A.apply({0, 0, 0})); break;
+                default: break;
             }
         } catch (const GeometryError&) {
             // invalid parameters: no analytic features (the evaluation reports the error)
