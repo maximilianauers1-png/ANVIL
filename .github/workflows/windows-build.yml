@@ -16,15 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        id: py311
         with:
           python-version: "3.11"
       - name: numpy for the reference tests
-        run: python -m pip install --quiet numpy
+        run: '& "${{ steps.py311.outputs.python-path }}" -m pip install --quiet numpy'
       - uses: jurplel/install-qt-action@v4
         with:
           version: "6.8.3"
           arch: win64_msvc2022_64
           cache: true
+          # install-qt-action sets up its own (newest) Python and would replace
+          # pythonLocation; ANVIL embeds exactly 3.11 (see steps.py311)
+          setup-python: false
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Cache OpenCASCADE
         uses: actions/cache@v4
@@ -35,7 +39,7 @@ jobs:
         shell: pwsh
         run: ./scripts/build-occt.ps1
       - name: Configure
-        run: cmake --preset windows-release -DPython3_EXECUTABLE="$env:pythonLocation\python.exe" -DOpenCASCADE_DIR="${{ github.workspace }}/.deps/occt/cmake"
+        run: cmake --preset windows-release -DPython3_EXECUTABLE="${{ steps.py311.outputs.python-path }}" -DOpenCASCADE_DIR="${{ github.workspace }}/.deps/occt/cmake"
       - name: Build
         run: cmake --build --preset windows-release
       - name: Test (without GUI)
@@ -44,7 +48,7 @@ jobs:
         shell: pwsh
         run: |
           $env:QT_ROOT_DIR = "$env:QT_ROOT_DIR"
-          ./scripts/build-windows.ps1 -SkipTests -Python "$env:pythonLocation\python.exe"
+          ./scripts/build-windows.ps1 -SkipTests -Python "${{ steps.py311.outputs.python-path }}"
       - name: Smoke test packaged CLI (isolated Python, no sockets)
         shell: pwsh
         run: |
