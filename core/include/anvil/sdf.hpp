@@ -121,6 +121,21 @@ Grid from_mesh(const Mesh& m, double h);
 /// (winding.hpp), the magnitude the unsigned distance. `capped` (optional)
 /// receives the number of cap triangles (0 = the input was closed).
 Grid from_mesh_robust(const Mesh& m, double h, std::size_t* capped = nullptr);
+/// Fills enclosed voids: positive voxels not connected (6-neighbourhood)
+/// to the outside become negative. Prints need no trapped-resin pockets, and
+/// folds of posed skins enclose pockets with winding number 0. Returns the
+/// number of voxels changed.
+std::size_t fill_cavities(Grid& g);
+/// Removes free-floating solid specks of at most `max_voxels` voxels (not
+/// touching interior bricks). Returns the number of voxels changed.
+std::size_t remove_specks(Grid& g, std::size_t max_voxels);
+/// Joins checkerboard lattice faces (two sheets through one cell edge, a
+/// non-manifold edge after contouring) towards the solid. Returns the number
+/// of voxels changed.
+std::size_t resolve_ambiguous_faces(Grid& g);
+/// fill_cavities, remove_specks (27 voxels) and resolve_ambiguous_faces to a
+/// fixed point: a closed, manifold, void-free contour. Returns voxels changed.
+std::size_t clean_for_print(Grid& g);
 
 /// Dual contouring (Ju et al. 2002 topology: one quad per sign-changing
 /// lattice edge) of the cells owned by one chunk (chunk coordinates in units

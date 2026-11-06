@@ -16,6 +16,7 @@
 #include "anvil/stl.hpp"
 #include "anvil/tolerance.hpp"
 #include "anvil/validate.hpp"
+#include "anvil/weapon.hpp"
 
 namespace anvil {
 
@@ -53,6 +54,9 @@ const char* node_kind_name(NodeKind k) {
         case NodeKind::Star: return "Star";
         case NodeKind::Figure: return "Figure";
         case NodeKind::MiniBase: return "MiniBase";
+        case NodeKind::Model: return "Model";
+        case NodeKind::Weapon: return "Weapon";
+        case NodeKind::Attach: return "Attach";
     }
     return "?";
 }
@@ -156,8 +160,27 @@ const std::vector<ParamSpec>& param_specs(NodeKind k) {
         {"d", kLength, 25, true, false, "diameter (25 / 32 / 40 mm standard)"},
         {"h", kLength, 3.5, true, false, "height (top at z = 0)"},
         {"seed", kNone, 1, false, true, "pattern variant"}};
+    static const std::vector<ParamSpec> model = [] {
+        std::vector<ParamSpec> v{{"height", kLength, 32, true, false, "height of the model (rest pose, feet to top)"}};
+        for (const auto& n : figure::pose_names()) v.push_back({n.c_str(), kAngle, 0, false, false, "pose angle"});
+        return v;
+    }();
+    static const std::vector<ParamSpec> weap{
+        {"length", kLength, 19, true, false, "overall length"},
+        {"width", kLength, 1.6, true, false, "blade width (axe: head height)"},
+        {"thickness", kLength, 0.6, true, false, "blade thickness at the spine"},
+        {"grip_d", kLength, 1.0, true, false, "grip / haft diameter"},
+        {"voxel", kLength, 0, false, true, "clay voxel size (0 = automatic, 0.05 mm)"}};
+    static const std::vector<ParamSpec> attach{
+        {"pitch", kAngle, 0, false, false, "tilt of the weapon up (+) / down (-) from pointing forwards"},
+        {"yaw", kAngle, 0, false, false, "swing sideways about the forearm axis"},
+        {"roll", kAngle, 0, false, false, "rotation about the weapon's own axis"},
+        {"slide", kLength, 0, false, false, "shift along the grip (+: the hand moves towards the blade)"}};
     static const std::vector<ParamSpec> none;
     switch (k) {
+        case NodeKind::Model: return model;
+        case NodeKind::Weapon: return weap;
+        case NodeKind::Attach: return attach;
         case NodeKind::Figure: return fig;
         case NodeKind::MiniBase: return mbase;
         case NodeKind::Tube: return tube;
@@ -231,8 +254,10 @@ bool is_brep_kind(NodeKind k) {
 
 const std::vector<std::string>& attr_names(NodeKind k) {
     static const std::vector<std::string> edges{"edges"}, faces{"faces"}, step{"path", "sha256"}, ref{"name"},
-        solid{"ends", "join"}, fig{"preset"}, mbase{"texture"}, none;
+        solid{"ends", "join"}, fig{"preset"}, mbase{"texture"}, weap{"type"}, attach{"hand"}, none;
     switch (k) {
+        case NodeKind::Weapon: return weap;
+        case NodeKind::Attach: return attach;
         case NodeKind::MiniBase: return mbase;
         case NodeKind::Figure: return fig;
         case NodeKind::Solidify: return solid;
@@ -257,6 +282,7 @@ std::vector<std::string> Node::child_names() const {
         for (std::size_t i = 0; i < inputs.size(); ++i) v.push_back(std::to_string(i));
         return v;
     }
+    if (kind == NodeKind::Attach) return {"item", "model"};
     if (inputs.size() == 1) return {"src"};
     return {};
 }
@@ -297,6 +323,19 @@ NodePtr make_imported(std::shared_ptr<const Mesh> mesh, std::string path, std::s
     return n;
 }
 
+NodePtr make_model(std::shared_ptr<const rig::ModelAsset> asset, std::string path, std::string sha,
+                   std::map<std::string, Param> params) {
+    if (!asset) throw GeometryError("model: no data");
+    check_names(NodeKind::Model, params);
+    auto n = std::make_shared<Node>();
+    n->kind = NodeKind::Model;
+    n->model = std::move(asset);
+    n->source_path = std::move(path);
+    n->source_sha256 = std::move(sha);
+    n->params = with_defaults(NodeKind::Model, std::move(params));
+    return n;
+}
+
 NodePtr make_sketch(std::shared_ptr<const Sketch> sk) {
     if (!sk) throw GeometryError("empty sketch");
     auto n = std::make_shared<Node>();
@@ -312,8 +351,9 @@ NodePtr make_feature(NodeKind k, std::vector<NodePtr> inputs, std::map<std::stri
         if (std::find(attr_names(k).begin(), attr_names(k).end(), name) == attr_names(k).end())
             throw GeometryError(std::string(node_kind_name(k)) + " has no attribute '" + name + "'");
     std::size_t need_min = k == NodeKind::Loft || k == NodeKind::Sweep ? 2
+                           : k == NodeKind::Attach ? 2
                            : (k == NodeKind::StepImport || k == NodeKind::Ref || k == NodeKind::Figure ||
-                              k == NodeKind::MiniBase) ? 0 : 1;
+                              k == NodeKind::MiniBase || k == NodeKind::Weapon) ? 0 : 1;
     std::size_t need_max = k == NodeKind::Loft ? 64 : need_min;
     if (inputs.size() < need_min || inputs.size() > need_max)
         throw GeometryError(std::string(node_kind_name(k)) + " needs " + std::to_string(need_min) +
@@ -521,6 +561,15 @@ std::string to_python(const NodePtr& n) {
         case NodeKind::Sketch:
             o << sketch_to_python(*n->sketch);
             break;
+        case NodeKind::Model:
+            o << "model_file(" << py_str(n->source_path) << ", sha256=" << py_str(n->source_sha256);
+            for (const auto& sp : param_specs(n->kind)) {
+                const Param& p = n->params.at(sp.name);
+                if (sp.dim == dims::kAngle && p.expr.empty() && p.value == 0.0) continue;  // unposed angles stay implicit
+                o << ", " << sp.name << "=" << param_to_python(p, sp.dim);
+            }
+            o << ")";
+            break;
         case NodeKind::Ref:
             o << "ref(" << py_str(n->attrs.at("name")) << ")";
             break;
@@ -537,7 +586,8 @@ std::string to_python(const NodePtr& n) {
                 {NodeKind::EdgeChamfer, "chamfer_edges"}, {NodeKind::Shell, "shell"},
                 {NodeKind::LinearPattern, "pattern_linear"}, {NodeKind::CircularPattern, "pattern_circular"},
                 {NodeKind::Loft, "loft"}, {NodeKind::Sweep, "sweep"}, {NodeKind::Solidify, "solidify"},
-                {NodeKind::Deform, "deform"}, {NodeKind::Figure, "figure"}, {NodeKind::MiniBase, "mini_base"}};
+                {NodeKind::Deform, "deform"}, {NodeKind::Figure, "figure"}, {NodeKind::MiniBase, "mini_base"},
+                {NodeKind::Weapon, "weapon"}, {NodeKind::Attach, "attach"}};
             o << fn.at(n->kind) << "(";
             bool first = true;
             for (const auto& in : n->inputs) o << (first ? "" : ", ") << to_python(in), first = false;
@@ -686,6 +736,7 @@ struct Evaluator {
     bool has_mesh_only(const NodePtr& n) {
         if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::ImportedMesh ||
             n->kind == NodeKind::Sculpt || n->kind == NodeKind::Figure || n->kind == NodeKind::MiniBase ||
+            n->kind == NodeKind::Model || n->kind == NodeKind::Weapon || n->kind == NodeKind::Attach ||
             is_mesh_primitive(n->kind))
             return true;
         if (n->kind == NodeKind::Ref) {
@@ -725,6 +776,7 @@ struct Evaluator {
         if (n->kind == NodeKind::Sketch) o << "|" << sketch_to_python(solve_sketch(*n->sketch, vars, false).first);
         if (n->kind == NodeKind::Boolean) o << "|op=" << int(n->op);
         if (n->kind == NodeKind::ImportedMesh) o << "|mesh=" << n->source_sha256 << "|" << n->mesh.get();
+        if (n->kind == NodeKind::Model) o << "|model=" << n->source_sha256 << "|" << n->model.get();
         if (n->kind == NodeKind::Sculpt) o << "|sculpt=" << sculpt_prefix_key(n, n->sculpt->strokes.size());
         for (const auto& s : param_specs(n->kind))
             if (n->params.count(s.name)) o << "|" << s.name << "=" << repr_double(get(n, s.name));
@@ -772,7 +824,7 @@ struct Evaluator {
                     throw GeometryError("sculpt: voxel " + repr_double(sd.voxel) + " mm is too fine for this object (" +
                                         std::to_string(long(voxels / 1e6)) + " M voxels in its box); use voxel >= " +
                                         repr_double(sd.voxel * std::cbrt(voxels / tol::kMaxSculptGridVoxels)) + " mm");
-                g = sdf::from_mesh(m, sd.voxel);
+                g = src->solid ? sdf::from_mesh(m, sd.voxel) : sdf::from_mesh_robust(m, sd.voxel);
             }
             gc.put(keys[0], std::make_shared<const sdf::Grid>(g));
         }
@@ -809,6 +861,27 @@ struct Evaluator {
         auto out = std::make_shared<Shape>(*s);
         if (m.Status() == manifold::Manifold::Error::NoError) out->solid = std::make_shared<manifold::Manifold>(std::move(m));
         else out->error = "sculpted surface is not a closed manifold (Manifold status " + std::to_string(int(m.Status())) + ")";
+        return out;
+    }
+
+    // Clay boolean of two shapes of any kind: the voxel of a clay operand, else
+    // the figure default (height / 600, at least 0.05 mm, a standard step).
+    static sdf::Grid grid_boolean(const Shape& a, const Shape& b, BoolOp op) {
+        double h = a.grid ? a.grid->h() : b.grid ? b.grid->h() : 0.0;
+        if (h <= 0) {
+            Box3 bb = a.mesh->bounds();
+            bb.add(b.mesh->bounds());
+            const Vec3 ext = bb.hi - bb.lo;
+            h = sdf::voxel_step(std::max(tol::kDefaultVoxelMm, std::max({ext.x, ext.y, ext.z}) / 600));
+        }
+        auto to_grid = [&](const Shape& s) {
+            if (s.grid && s.grid->h() == h) return *s.grid;
+            return s.solid ? sdf::from_mesh(*s.mesh, h) : sdf::from_mesh_robust(*s.mesh, h);
+        };
+        const sdf::GridOp gop = op == BoolOp::Union ? sdf::GridOp::Union
+                                : op == BoolOp::Difference ? sdf::GridOp::Difference : sdf::GridOp::Intersection;
+        sdf::Grid out = sdf::combine(to_grid(a), to_grid(b), gop);
+        sdf::clean_for_print(out);  // parts touching along a cell edge, voids between parts
         return out;
     }
 
@@ -905,6 +978,12 @@ struct Evaluator {
                     }
                 }
                 auto a = solid_shape(eval(n->inputs[0])), b = solid_shape(eval(n->inputs[1]));
+                if ((!a->solid || !b->solid) && !a->mesh->F.empty() && !b->mesh->F.empty() && !a->brep && !b->brep) {
+                    // an operand without a closed manifold (imported AI meshes: holes,
+                    // overlapping shells): combine as clay. Each side is voxelized robustly
+                    // (winding numbers), so the result is closed whatever the input was.
+                    return shape_from_grid(std::make_shared<const sdf::Grid>(grid_boolean(*a, *b, n->op)));
+                }
                 for (auto* s : {&a, &b})
                     if (!(*s)->solid) throw GeometryError("boolean operand is not a closed manifold: " + (*s)->error);
                 Manifold r = n->op == BoolOp::Union        ? *a->solid + *b->solid
@@ -919,6 +998,7 @@ struct Evaluator {
                 double rx = get(n, "rx") * k, ry = get(n, "ry") * k, rz = get(n, "rz") * k;
                 if (s->solid) return from_manifold(s->solid->Rotate(rx, ry, rz).Translate({tx, ty, tz}));
                 auto out = std::make_shared<Shape>(*s);  // non-manifold mesh: transform vertices directly
+                out->posed = nullptr;                    // (accessories attach to untransformed models)
                 auto mesh = std::make_shared<Mesh>(*s->mesh);
                 const double ax = rx / k, ay = ry / k, az = rz / k;
                 for (auto& p : mesh->V) {
@@ -1016,6 +1096,96 @@ struct Evaluator {
                 sh->grid = g;
                 sh->chunks = sdf::chunk_meshes(*g);
                 sh->mesh = std::make_shared<const Mesh>(sdf::weld(sh->chunks));
+                return sh;
+            }
+            case NodeKind::Model: {
+                const auto& A = *n->model;
+                const double height = get(n, "height");
+                const double s = height / A.height0;
+                auto pr = std::make_shared<PosedRig>();
+                pr->rig = A.rig;
+                pr->rig.scale(s);
+                std::map<std::string, double> pose;
+                for (const auto& pn : figure::pose_names()) pose[pn] = get(n, pn.c_str());
+                pr->joints = rig::pose_joints(pr->rig, pose);
+                Mesh rest = A.mesh;
+                for (auto& v : rest.V) v = v * s;
+                auto mesh = std::make_shared<Mesh>(rig::deform(rest, pr->rig, pr->joints));
+                // stand on the ground after posing (as the parametric figures do)
+                const double lift = -mesh->bounds().lo.z;
+                if (lift != 0) {
+                    for (auto& v : mesh->V) v.z += lift;
+                    for (auto& x : pr->joints) x.t.z += lift;
+                }
+                auto sh = std::make_shared<Shape>();
+                sh->mesh = mesh;
+                sh->posed = pr;
+                return sh;
+            }
+            case NodeKind::Weapon: {
+                weapon::Params wp;
+                auto it = n->attrs.find("type");
+                wp.type = it == n->attrs.end() ? "longsword" : it->second;
+                if (std::find(weapon::types().begin(), weapon::types().end(), wp.type) == weapon::types().end())
+                    throw GeometryError("weapon: type must be one of longsword, zweihander, buster, dagger, axe, spear; got '" +
+                                        wp.type + "'");
+                wp.length = get(n, "length"), wp.width = get(n, "width"), wp.thickness = get(n, "thickness");
+                wp.grip_d = get(n, "grip_d");
+                double h = get(n, "voxel");
+                if (h <= 0) h = tol::kDefaultVoxelMm;
+                if (h < tol::kMinVoxelMm) throw GeometryError("weapon: voxel must be >= " + repr_double(tol::kMinVoxelMm) + " mm");
+                wp.min_feature = 1.2 * h;  // as Figure: thinner edges would vanish or turn non-manifold
+                weapon::Weapon w;
+                try {
+                    w = weapon::make(wp);
+                } catch (const std::runtime_error& e) {
+                    throw GeometryError(e.what());
+                }
+                auto g = std::make_shared<const sdf::Grid>(sdf::from_function([&](const Vec3& p) { return w.sdf(p); }, w.bounds, h));
+                auto sh = std::make_shared<Shape>();
+                sh->grid = g;
+                sh->chunks = sdf::chunk_meshes(*g);
+                sh->mesh = std::make_shared<const Mesh>(sdf::weld(sh->chunks));
+                return sh;
+            }
+            case NodeKind::Attach: {
+                auto item = eval(n->inputs[0]);
+                auto target = eval(n->inputs[1]);
+                if (!target->posed)
+                    throw GeometryError("attach: the target is not an imported model with a rig (attach to the model "
+                                        "object itself, before moving or merging it)");
+                auto it = n->attrs.find("hand");
+                const std::string hand = it == n->attrs.end() ? "r" : it->second;
+                if (hand != "r" && hand != "l") throw GeometryError("attach: hand must be 'r' or 'l'");
+                rig::Xf grip;
+                try {
+                    grip = rig::hand_grip(target->posed->rig, target->posed->joints, hand == "l" ? 1 : -1);
+                } catch (const std::runtime_error& e) {
+                    throw GeometryError(std::string("attach: ") + e.what());
+                }
+                // Hold: the weapon axis (+Z) points forwards (-Y of the canonical
+                // forearm frame), its flat (X) up the arm (+Z): R e_z = -e_y,
+                // R e_x = e_z, hence R e_y = -e_x (a proper rotation). Then the
+                // user's yaw (about the forearm axis) and pitch (up/down).
+                using rig::Quat;
+                const Quat hold = Quat::from_to({0, 0, 1}, {0, -1, 0});
+                const Quat fix = Quat::from_to(hold.rotate({1, 0, 0}), {0, 0, 1});  // turn the flat about the new axis
+                const Quat R = grip.q * Quat::axis_angle({0, 0, 1}, get(n, "yaw")) * Quat::axis_angle({1, 0, 0}, -get(n, "pitch")) *
+                               fix * hold * Quat::axis_angle({0, 0, 1}, get(n, "roll"));
+                const Vec3 slide{0, 0, get(n, "slide")};
+                auto mesh = std::make_shared<Mesh>(*item->mesh);
+                if (item->grid) relax_folds(*mesh, float_tolerance(*mesh));  // as export_mesh does for clay
+                for (auto& v : mesh->V) v = grip.t + R.rotate(v - slide);
+                auto sh = std::make_shared<Shape>();
+                sh->mesh = mesh;
+                if (item->solid || item->grid) {
+                    manifold::MeshGL64 g;
+                    g.numProp = 3;
+                    for (const auto& p : mesh->V) g.vertProperties.insert(g.vertProperties.end(), {p.x, p.y, p.z});
+                    for (const auto& t : mesh->F) g.triVerts.insert(g.triVerts.end(), {t[0], t[1], t[2]});
+                    Manifold m(g);
+                    if (m.Status() == Manifold::Error::NoError) sh->solid = std::make_shared<Manifold>(std::move(m));
+                }
                 return sh;
             }
             case NodeKind::Figure: {
@@ -1193,7 +1363,8 @@ std::string brep_json(const NodePtr& root, const VariableResolver& vars, const E
             throw GeometryError("an imported mesh cannot be combined with B-Rep features (fillet, extrude, ...); "
                                 "mesh-to-solid conversion arrives with the repair tools (M5)");
         if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::Sculpt ||
-            n->kind == NodeKind::Figure || n->kind == NodeKind::MiniBase || is_mesh_primitive(n->kind))
+            n->kind == NodeKind::Figure || n->kind == NodeKind::MiniBase || n->kind == NodeKind::Model ||
+            n->kind == NodeKind::Weapon || n->kind == NodeKind::Attach || is_mesh_primitive(n->kind))
             throw GeometryError(std::string(node_kind_name(n->kind)) +
                                 " produces mesh geometry; exact features (fillet, chamfer, shell, extrude, ...) cannot be "
                                 "applied on top of it. Apply the exact features first, then combine with the " +

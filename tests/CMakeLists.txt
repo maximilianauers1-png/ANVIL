@@ -58,3 +58,9 @@ install(TARGETS anvil-sculpt-bench RUNTIME DESTINATION . COMPONENT anvil)
 add_test(NAME acceptance_shapes
          COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/shapes_suite.py)
 set_tests_properties(acceptance_shapes PROPERTIES PASS_REGULAR_EXPRESSION "SHAPES OK")
+
+# M4: imported minis (GLB/OBJ), rig + pose, weapons, merge to a printable object
+add_test(NAME acceptance_m4
+         COMMAND $<TARGET_FILE:anvil-cli> ${CMAKE_CURRENT_SOURCE_DIR}/acceptance/m4_suite.py)
+set_tests_properties(acceptance_m4 PROPERTIES PASS_REGULAR_EXPRESSION "M4 SUITE OK" TIMEOUT 900
+                     ENVIRONMENT "ANVIL_TEST_DIR=${CMAKE_CURRENT_SOURCE_DIR}/acceptance")

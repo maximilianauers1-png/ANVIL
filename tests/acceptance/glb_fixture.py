@@ -42,7 +42,7 @@ def _tubes():
     t.append(("mixamorig:Hips", "mixamorig:Spine", (0, 0.86, 0), b["mixamorig:Spine"], 0.15))
     t.append(("mixamorig:Spine", "mixamorig:Spine1", b["mixamorig:Spine"], b["mixamorig:Spine1"], 0.14))
     t.append(("mixamorig:Spine1", "mixamorig:Neck", b["mixamorig:Spine1"], (0, 1.48, 0), 0.17))
-    t.append(("mixamorig:Neck", "mixamorig:Head", b["mixamorig:Neck"], b["mixamorig:Head"], 0.06))
+    t.append(("mixamorig:Neck", "mixamorig:Head", b["mixamorig:Neck"], (0, 1.64, 0), 0.06))  # into the head
     t.append(("mixamorig:Head", None, b["mixamorig:Head"], (0, 1.80, 0), 0.11))
     for s in ("Left", "Right"):
         p = "mixamorig:" + s
@@ -93,6 +93,10 @@ def humanoid_glb(path, rigged=True):
     index = {n: i for i, n in enumerate(names)}
     pos, joints, weights, idx = [], [], [], []
     for bone, nxt, a, c, r in _tubes():
+        if nxt is not None:  # overlap the next segment by 3 cm (no face-to-face contact)
+            d = [c[i] - a[i] for i in range(3)]
+            L = math.sqrt(sum(x * x for x in d))
+            c = tuple(c[i] + d[i] / L * 0.03 for i in range(3))
         V, T, F = _tube_mesh(a, c, r)
         base = len(pos)
         for p, t in zip(V, T):

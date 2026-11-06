@@ -11,6 +11,7 @@
 
 #include "anvil/expr.hpp"
 #include "anvil/mesh.hpp"
+#include "anvil/rig.hpp"
 #include "anvil/sdf.hpp"
 #include "anvil/units.hpp"
 
@@ -54,6 +55,9 @@ enum class NodeKind {
     // M4
     Figure,        // parametric figure from an armature (Mini Forge); attr "preset"; evaluates to clay (SDF)
     MiniBase,      // round miniature base with procedural top; attr "texture"; clay (SDF)
+    Model,         // imported mini (glTF/OBJ/STL) with rig; height + pose angles; posed mesh (DQS)
+    Weapon,        // parametric accessory (sword, zweihander, buster sword, ...); attr "type"; clay (SDF)
+    Attach,        // in: item, model; places the item in the model's posed hand; attr "hand" ("r"/"l")
 };
 /// True for the primitives evaluated only by the mesh kernel (no exact form).
 bool is_mesh_primitive(NodeKind k);
@@ -99,6 +103,7 @@ struct Node {
     std::map<std::string, std::string> attrs;  // non-numeric attributes (edge selector, ref name, ...)
     std::shared_ptr<const Sketch> sketch;      // Sketch nodes
     std::shared_ptr<const SculptData> sculpt;  // Sculpt nodes
+    std::shared_ptr<const rig::ModelAsset> model;  // Model nodes (source_path / source_sha256 name the file)
 
     /// Child by path element: "a"/"b" (Boolean), "src" (Transform, features), "0".."n" (Loft/Sweep).
     NodePtr child(const std::string& elem) const;
@@ -116,6 +121,9 @@ NodePtr make_feature(NodeKind k, std::vector<NodePtr> inputs, std::map<std::stri
                      std::map<std::string, std::string> attrs);
 NodePtr make_ref(const std::string& object_name);
 NodePtr make_sculpt(NodePtr src, double voxel_mm, std::vector<sdf::Stroke> strokes);
+/// Imported, posable mini: the asset (rest mesh + rig), its file and hash, height and pose angles.
+NodePtr make_model(std::shared_ptr<const rig::ModelAsset> asset, std::string path, std::string sha256,
+                   std::map<std::string, Param> params);
 /// Allowed attribute names per kind.
 const std::vector<std::string>& attr_names(NodeKind k);
 
@@ -144,6 +152,13 @@ struct AnalyticFeatures {
     std::vector<Circle> circles;
 };
 
+/// A posed model's rig (Model nodes): joint transforms rest -> posed,
+/// including the lift that keeps the posed figure on z = 0.
+struct PosedRig {
+    rig::Rig rig;                 // scaled to the model's height
+    std::vector<rig::Xf> joints;
+};
+
 struct Shape {
     std::shared_ptr<const manifold::Manifold> solid;  // null if the mesh is not a closed manifold
     std::shared_ptr<const Mesh> mesh;                 // always present (empty for sketches)
@@ -154,6 +169,7 @@ struct Shape {
     // `mesh` is their welded union). `solid` is built on demand (booleans).
     std::shared_ptr<const sdf::Grid> grid;
     std::vector<std::shared_ptr<const sdf::ChunkMesh>> chunks;
+    std::shared_ptr<const PosedRig> posed;  // Model nodes: for attaching accessories
 };
 
 /// Object name -> current root node (for Ref nodes); empty if unknown.

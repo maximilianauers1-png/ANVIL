@@ -7,6 +7,8 @@
 #include <filesystem>
 
 #include "anvil/geometry.hpp"
+#include "anvil/model_io.hpp"
+#include "anvil/weapon.hpp"
 #include "anvil/sketch.hpp"
 #include "anvil/stl.hpp"
 #include "anvil/tolerance.hpp"
@@ -189,7 +191,8 @@ NodeKind feature_kind(const std::string& k) {
         {"chamfer", NodeKind::EdgeChamfer}, {"shell", NodeKind::Shell}, {"linear_pattern", NodeKind::LinearPattern},
         {"circular_pattern", NodeKind::CircularPattern}, {"loft", NodeKind::Loft}, {"sweep", NodeKind::Sweep},
         {"step", NodeKind::StepImport}, {"solidify", NodeKind::Solidify}, {"deform", NodeKind::Deform},
-        {"figure", NodeKind::Figure}, {"mini_base", NodeKind::MiniBase}};
+        {"figure", NodeKind::Figure}, {"mini_base", NodeKind::MiniBase},
+        {"weapon", NodeKind::Weapon}, {"attach", NodeKind::Attach}};
     auto it = m.find(k);
     if (it == m.end()) throw std::invalid_argument("unknown feature '" + k + "'");
     return it->second;
@@ -219,6 +222,20 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         .def("children", [](const NodeHandle& n) { return n.node->child_names(); })
         .def("child", [](const NodeHandle& n, const std::string& path) { return NodeHandle{node_at(n.node, path)}; })
         .def("same", [](const NodeHandle& a, const NodeHandle& b) { return a.node == b.node; })
+        .def("model_info", [](const NodeHandle& n) {
+            if (n.node->kind != NodeKind::Model) throw std::invalid_argument("not an imported model");
+            const auto& a = *n.node->model;
+            py::dict d;
+            d["path"] = n.node->source_path;
+            d["sha256"] = n.node->source_sha256;
+            d["format"] = a.format;
+            d["parts"] = a.parts;
+            d["triangles"] = a.mesh.F.size();
+            d["vertices"] = a.mesh.V.size();
+            d["rig"] = a.rig.automatic ? "automatic" : "file";
+            d["joints"] = a.rig.names;
+            return d;
+        })
         .def("sculpt_info", [](const NodeHandle& n) {
             if (n.node->kind != NodeKind::Sculpt) throw std::invalid_argument("not a sculpt node");
             py::list strokes;
@@ -335,6 +352,38 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         auto mesh = std::make_shared<Mesh>(std::move(r.mesh));
         return std::make_tuple(NodeHandle{make_imported(mesh, path, h, unit_from(unit))}, h, r.raw_triangles,
                                r.dropped_degenerate);
+    });
+
+    // Imported minis: the asset (mesh + rig; the automatic rig takes a moment)
+    // is cached per file hash, so replaying the journal or reloading is fast.
+    m.def("load_model", [](const std::string& path, const std::string& sha, const ParamDict& p) {
+        static std::mutex mu;
+        static std::map<std::string, std::weak_ptr<const rig::ModelAsset>> cache;
+        std::filesystem::path fp = upath(path);
+        std::string bytes = read_file(fp);
+        std::string h = sha256_hex(bytes);
+        if (!sha.empty() && sha != h)
+            throw std::runtime_error("'" + path + "' changed since it was imported (sha256 " + h.substr(0, 12) +
+                                     "... != " + sha.substr(0, 12) + "...)");
+        std::shared_ptr<const rig::ModelAsset> asset;
+        {
+            std::lock_guard lk(mu);
+            asset = cache[h].lock();
+        }
+        if (!asset) {
+            py::gil_scoped_release nogil;
+            asset = rig::make_asset(read_model(fp), tol::kDefaultMiniHeightMm);
+            std::lock_guard lk(mu);
+            cache[h] = asset;
+        }
+        return std::make_tuple(NodeHandle{make_model(asset, path, h, to_params(p))}, h);
+    });
+    m.def("weapon_types", [] { return weapon::types(); });
+    m.def("weapon_defaults", [](const std::string& type, double height) {
+        const auto w = weapon::defaults(type, height);
+        py::dict d;
+        d["length"] = w.length, d["width"] = w.width, d["thickness"] = w.thickness, d["grip_d"] = w.grip_d;
+        return d;
     });
 
     // --- document (mutations require an open transaction) -----------------------

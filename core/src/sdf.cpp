@@ -23,6 +23,10 @@ namespace {
 // puts several cell vertices on the same point: zero-area triangles. Zero is
 // stored as +2^-10 h instead (consistent with "0 counts as outside").
 constexpr float kZeroNudge = 1.0f / 1024.0f;
+// Solid islands of at most 3^3 voxels (0.15 mm at 50 um) cannot be printed
+// (resin XY pixel ~18-50 um, but a free-floating speck has no support) and
+// are sign noise of robust voxelization; see remove_specks.
+constexpr std::size_t kSpeckVoxels = 27;
 }  // namespace
 
 // ------------------------------------------------------------------ binary16
@@ -217,7 +221,7 @@ namespace {
 using BrickFiller = std::function<void(const IVec3& b, double h, double* vals)>;
 
 bool fill_brick(const std::function<double(const Vec3&)>& f, const BrickFiller* filler, const IVec3& b, double h, Brick& out) {
-    bool any = false;
+    bool any = false, has_neg = false, has_pos = false;
     double vals[kBrickVoxels];
     if (filler) (*filler)(b, h, vals);
     for (int z = 0; z < kBrick; ++z)
@@ -228,9 +232,10 @@ bool fill_brick(const std::function<double(const Vec3&)>& f, const BrickFiller* 
                 float v = float(std::clamp(fv / h, double(-kBand), double(kBand)));
                 if (v == 0.0f) v = kZeroNudge;  // see kZeroNudge
                 if (std::abs(v) < kBand) any = true;
+                (v < 0 ? has_neg : has_pos) = true;
                 out.v[Brick::index(x, y, z)] = float_to_half(v);
             }
-    return any;
+    return any || (has_neg && has_pos);  // a sign change must be contoured even at clamped values
 }
 
 Grid build(const std::function<double(const Vec3&)>& f, const Box3& bounds, double h, double slack = 0.0,
@@ -340,6 +345,249 @@ Grid from_mesh(const Mesh& m, double h) {
     return build(sdf, m.bounds(), h);
 }
 
+std::size_t fill_cavities(Grid& g) {
+    // Flood fill of the outside through the positive voxels of the allocated
+    // bricks, seeded where a positive voxel borders an unallocated brick that
+    // is not interior (implied +kBand: outside). Positive voxels it cannot
+    // reach are enclosed voids; their values are mirrored to negative.
+    std::vector<IVec3> coords;
+    std::unordered_map<IVec3, std::uint32_t, IVec3Hash> index;
+    for (const auto& [c, _] : g.bricks()) index.emplace(c, std::uint32_t(coords.size())), coords.push_back(c);
+    std::sort(coords.begin(), coords.end(), [](const IVec3& a, const IVec3& b) { return std::tie(a.z, a.y, a.x) < std::tie(b.z, b.y, b.x); });
+    for (std::uint32_t i = 0; i < coords.size(); ++i) index[coords[i]] = i;
+    std::vector<const Brick*> br(coords.size());
+    for (std::uint32_t i = 0; i < coords.size(); ++i) br[i] = g.bricks().at(coords[i]).get();
+    std::vector<std::uint8_t> seen(coords.size() * kBrickVoxels, 0);
+    std::vector<std::uint64_t> stack;  // brick index << 9 | voxel
+    auto pos = [&](std::uint32_t b, int v) { return half_to_float(br[b]->v[std::size_t(v)]) > 0; };
+    auto push = [&](std::uint32_t b, int v) {
+        auto& sv = seen[std::size_t(b) * kBrickVoxels + std::size_t(v)];
+        if (sv || !pos(b, v)) return;
+        sv = 1;
+        stack.push_back((std::uint64_t(b) << 9) | std::uint64_t(v));
+    };
+    const int dirs[6][3] = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
+    // neighbour of voxel (b, x, y, z) in direction d: same brick or the adjacent one
+    auto step = [&](std::uint32_t b, int x, int y, int z, int d, std::uint32_t& nb, int& nv) {
+        int c[3] = {x + dirs[d][0], y + dirs[d][1], z + dirs[d][2]};
+        IVec3 bc = coords[b];
+        int* bcp[3] = {&bc.x, &bc.y, &bc.z};
+        for (int k = 0; k < 3; ++k) {
+            if (c[k] < 0) c[k] += kBrick, --*bcp[k];
+            else if (c[k] >= kBrick) c[k] -= kBrick, ++*bcp[k];
+        }
+        nv = Brick::index(c[0], c[1], c[2]);
+        if (bc == coords[b]) {
+            nb = b;
+            return 1;  // inside the brick
+        }
+        auto it = index.find(bc);
+        if (it != index.end()) {
+            nb = it->second;
+            return 1;
+        }
+        return g.is_interior(bc) ? 0 : -1;  // 0: solid, -1: outside
+    };
+    for (std::uint32_t b = 0; b < coords.size(); ++b)
+        for (int z = 0; z < kBrick; ++z)
+            for (int y = 0; y < kBrick; ++y)
+                for (int x = 0; x < kBrick; ++x) {
+                    if (x != 0 && y != 0 && z != 0 && x != kBrick - 1 && y != kBrick - 1 && z != kBrick - 1) continue;
+                    const int v = Brick::index(x, y, z);
+                    for (int d = 0; d < 6; ++d) {
+                        std::uint32_t nb;
+                        int nv;
+                        if (step(b, x, y, z, d, nb, nv) < 0) {
+                            push(b, v);
+                            break;
+                        }
+                    }
+                }
+    while (!stack.empty()) {
+        const std::uint64_t e = stack.back();
+        stack.pop_back();
+        const auto b = std::uint32_t(e >> 9);
+        const int v = int(e & 511), x = v % kBrick, y = (v / kBrick) % kBrick, z = v / (kBrick * kBrick);
+        for (int d = 0; d < 6; ++d) {
+            std::uint32_t nb;
+            int nv;
+            if (step(b, x, y, z, d, nb, nv) > 0) push(nb, nv);
+        }
+    }
+    std::size_t filled = 0;
+    for (std::uint32_t b = 0; b < coords.size(); ++b) {
+        bool any = false;
+        for (int v = 0; v < kBrickVoxels; ++v)
+            if (!seen[std::size_t(b) * kBrickVoxels + std::size_t(v)] && pos(b, v)) any = true;
+        if (!any) continue;
+        Brick& m = g.mutable_brick(coords[b]);
+        br[b] = &m;
+        for (int v = 0; v < kBrickVoxels; ++v) {
+            const float f = half_to_float(m.v[std::size_t(v)]);
+            if (f > 0 && !seen[std::size_t(b) * kBrickVoxels + std::size_t(v)]) m.v[std::size_t(v)] = float_to_half(-f), ++filled;
+        }
+        g.touch_mesh(coords[b]);
+    }
+    return filled;
+}
+
+std::size_t remove_specks(Grid& g, std::size_t max_voxels) {
+    // Components of negative voxels (6-neighbourhood, within allocated bricks)
+    // with at most max_voxels voxels that touch no interior brick are flipped
+    // to positive: sub-voxel specks the sign test leaves next to skin folds.
+    std::vector<IVec3> coords;
+    for (const auto& [c, _] : g.bricks()) coords.push_back(c);
+    std::sort(coords.begin(), coords.end(), [](const IVec3& a, const IVec3& b) { return std::tie(a.z, a.y, a.x) < std::tie(b.z, b.y, b.x); });
+    std::unordered_map<IVec3, std::uint32_t, IVec3Hash> index;
+    for (std::uint32_t i = 0; i < coords.size(); ++i) index[coords[i]] = i;
+    std::vector<const Brick*> br(coords.size());
+    for (std::uint32_t i = 0; i < coords.size(); ++i) br[i] = g.bricks().at(coords[i]).get();
+    std::vector<std::uint8_t> seen(coords.size() * kBrickVoxels, 0);
+    auto neg = [&](std::uint32_t b, int v) { return half_to_float(br[b]->v[std::size_t(v)]) < 0; };
+    const int dirs[6][3] = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 1, 0}, {0, 0, -1}, {0, 0, 1}};
+    std::vector<std::pair<std::uint32_t, int>> flip;
+    for (std::uint32_t b0 = 0; b0 < coords.size(); ++b0)
+        for (int v0 = 0; v0 < kBrickVoxels; ++v0) {
+            if (seen[std::size_t(b0) * kBrickVoxels + std::size_t(v0)] || !neg(b0, v0)) continue;
+            std::vector<std::pair<std::uint32_t, int>> comp{{b0, v0}};
+            seen[std::size_t(b0) * kBrickVoxels + std::size_t(v0)] = 1;
+            bool large = false;
+            for (std::size_t q = 0; q < comp.size(); ++q) {
+                const auto [b, v] = comp[q];
+                const int x = v % kBrick, y = (v / kBrick) % kBrick, z = v / (kBrick * kBrick);
+                for (const auto& d : dirs) {
+                    int c[3] = {x + d[0], y + d[1], z + d[2]};
+                    IVec3 bc = coords[b];
+                    int* bcp[3] = {&bc.x, &bc.y, &bc.z};
+                    for (int k = 0; k < 3; ++k) {
+                        if (c[k] < 0) c[k] += kBrick, --*bcp[k];
+                        else if (c[k] >= kBrick) c[k] -= kBrick, ++*bcp[k];
+                    }
+                    std::uint32_t nb = b;
+                    if (!(bc == coords[b])) {
+                        auto it = index.find(bc);
+                        if (it == index.end()) {
+                            if (g.is_interior(bc)) large = true;
+                            continue;
+                        }
+                        nb = it->second;
+                    }
+                    const int nv = Brick::index(c[0], c[1], c[2]);
+                    auto& sv = seen[std::size_t(nb) * kBrickVoxels + std::size_t(nv)];
+                    if (sv || !neg(nb, nv)) continue;
+                    sv = 1;
+                    comp.push_back({nb, nv});
+                }
+                if (comp.size() > max_voxels) large = true;
+                if (large) break;
+            }
+            if (large) {
+                // mark the rest of the component visited without collecting it
+                for (std::size_t q = 0; q < comp.size(); ++q) {
+                    const auto [b, v] = comp[q];
+                    const int x = v % kBrick, y = (v / kBrick) % kBrick, z = v / (kBrick * kBrick);
+                    for (const auto& d : dirs) {
+                        int c[3] = {x + d[0], y + d[1], z + d[2]};
+                        IVec3 bc = coords[b];
+                        int* bcp[3] = {&bc.x, &bc.y, &bc.z};
+                        for (int k = 0; k < 3; ++k) {
+                            if (c[k] < 0) c[k] += kBrick, --*bcp[k];
+                            else if (c[k] >= kBrick) c[k] -= kBrick, ++*bcp[k];
+                        }
+                        auto it = index.find(bc);
+                        if (it == index.end()) continue;
+                        const int nv = Brick::index(c[0], c[1], c[2]);
+                        auto& sv = seen[std::size_t(it->second) * kBrickVoxels + std::size_t(nv)];
+                        if (sv || !neg(it->second, nv)) continue;
+                        sv = 1;
+                        comp.push_back({it->second, nv});
+                    }
+                }
+                continue;
+            }
+            flip.insert(flip.end(), comp.begin(), comp.end());
+        }
+    std::sort(flip.begin(), flip.end());
+    for (std::size_t i = 0; i < flip.size();) {
+        const std::uint32_t b = flip[i].first;
+        Brick& m = g.mutable_brick(coords[b]);
+        for (; i < flip.size() && flip[i].first == b; ++i)
+            m.v[std::size_t(flip[i].second)] = float_to_half(std::abs(half_to_float(m.v[std::size_t(flip[i].second)])));
+        g.touch_mesh(coords[b]);
+    }
+    return flip.size();
+}
+
+std::size_t resolve_ambiguous_faces(Grid& g) {
+    // A lattice face whose corners alternate in sign (checkerboard) makes the
+    // contour pass the same cell edge twice: two sheets share an edge, which
+    // no vertex split can separate. Joining the negative diagonal (the
+    // smaller positive corner becomes -kZeroNudge) thickens the solid by less
+    // than one voxel there. Corners of such a face lie within one voxel of the
+    // surface (f is 1-Lipschitz), so only |f| <= h is scanned.
+    std::size_t total = 0;
+    for (int round = 0; round < 4; ++round) {
+        std::vector<IVec3> coords;
+        for (const auto& [c, _] : g.bricks()) coords.push_back(c);
+        std::sort(coords.begin(), coords.end(), [](const IVec3& a, const IVec3& b) { return std::tie(a.z, a.y, a.x) < std::tie(b.z, b.y, b.x); });
+        std::vector<std::vector<std::array<int, 3>>> fixes(coords.size());
+        parallel_for(coords.size(), [&](std::size_t bi) {
+            const IVec3 b = coords[bi];
+            for (int z = 0; z < kBrick; ++z)
+                for (int y = 0; y < kBrick; ++y)
+                    for (int x = 0; x < kBrick; ++x) {
+                        const int i = b.x * kBrick + x, j = b.y * kBrick + y, k = b.z * kBrick + z;
+                        const float v00 = g.at(i, j, k);
+                        if (std::abs(v00) > 1.0f) continue;
+                        const int ax[3][2][3] = {{{1, 0, 0}, {0, 1, 0}}, {{1, 0, 0}, {0, 0, 1}}, {{0, 1, 0}, {0, 0, 1}}};
+                        for (const auto& pl : ax) {
+                            const int* a = pl[0];
+                            const int* c = pl[1];
+                            const float v10 = g.at(i + a[0], j + a[1], k + a[2]);
+                            const float v01 = g.at(i + c[0], j + c[1], k + c[2]);
+                            const float v11 = g.at(i + a[0] + c[0], j + a[1] + c[1], k + a[2] + c[2]);
+                            const bool n00 = v00 < 0, n10 = v10 < 0, n01 = v01 < 0, n11 = v11 < 0;
+                            if (n00 != n11 || n10 != n01 || n00 == n10) continue;
+                            // positive pair: (00, 11) or (10, 01); flip the smaller one
+                            if (!n00) {
+                                if (v00 <= v11) fixes[bi].push_back({i, j, k});
+                                else fixes[bi].push_back({i + a[0] + c[0], j + a[1] + c[1], k + a[2] + c[2]});
+                            } else {
+                                if (v10 <= v01) fixes[bi].push_back({i + a[0], j + a[1], k + a[2]});
+                                else fixes[bi].push_back({i + c[0], j + c[1], k + c[2]});
+                            }
+                        }
+                    }
+        });
+        std::size_t n = 0;
+        for (const auto& f : fixes)
+            for (const auto& p : f)
+                if (const float v = g.at(p[0], p[1], p[2]); v > 0) {
+                    // mirrored value (>= 1/4 voxel): the contour crosses the joined
+                    // edges well inside them instead of at the lattice point itself
+                    g.set(p[0], p[1], p[2], -std::max(v, 0.25f));
+                    g.touch_mesh({floor_div(p[0], kBrick), floor_div(p[1], kBrick), floor_div(p[2], kBrick)});
+                    ++n;
+                }
+        total += n;
+        if (n == 0) break;
+    }
+    return total;
+}
+
+std::size_t clean_for_print(Grid& g) {
+    // each step can create work for the others (a joined diagonal may close a
+    // void, a removed speck may leave a checkerboard face): iterate to a fixed
+    // point; 6 rounds were never exceeded in the M4 tests
+    std::size_t total = 0;
+    for (int round = 0; round < 6; ++round) {
+        const std::size_t n = fill_cavities(g) + remove_specks(g, kSpeckVoxels) + resolve_ambiguous_faces(g);
+        total += n;
+        if (n == 0) break;
+    }
+    return total;
+}
+
 Grid from_mesh_robust(const Mesh& input, double h, std::size_t* capped) {
     // Sign: generalized winding number |w| > 1/2 of the boundary-capped soup
     // (ADR 0018). After capping, w is integer valued off the surface, so it is
@@ -351,53 +599,114 @@ Grid from_mesh_robust(const Mesh& input, double h, std::size_t* capped) {
     const std::size_t added = cap_boundaries(m);
     if (capped) *capped = added;
     const WindingNumber wn(m, tol::kWindingBeta);
-    const Bvh bvh(m);
     auto inside = [&](const Vec3& p) { return std::abs(wn(p)) > 0.5; };
+    // A lattice point on the surface itself (models are fitted to z = 0 and a
+    // height on the lattice: flat soles and head tops lie on lattice planes)
+    // reads w = 1/2. Test a point 1 % of a voxel off it in a generic direction
+    // (not parallel to the axes or to 45-degree faces) instead.
+    const Vec3 off = normalized(Vec3{0.5773, 0.6181, 0.5331}) * (0.01 * h);
+    auto inside_at = [&](const Vec3& p, double dist) { return inside(dist < 0.01 * h ? p + off : p); };
+    // Values are distances to the boundary of the solid only: a triangle is on
+    // it if the inside test differs a quarter voxel in front of and behind it
+    // at any of 7 sample points (centroid, near the corners, near the edge
+    // midpoints; a triangle may be only partly buried). Sheets inside the
+    // solid (buried shells, folds of posed skins) would otherwise pull |f|
+    // towards 0 just under the real surface and collapse contour vertices.
+    // Skipping bricks and propagating signs keep using the distance to all
+    // triangles: a lower bound of the boundary distance, so both stay valid
+    // even where a boundary piece was missed (it then only biases the value).
+    Mesh boundary;
+    boundary.V = m.V;
+    {
+        std::vector<char> keep(m.F.size(), 0);
+        const double eps = 0.25 * h;
+        static const double bary[7][3] = {{1 / 3., 1 / 3., 1 / 3.}, {0.8, 0.1, 0.1}, {0.1, 0.8, 0.1}, {0.1, 0.1, 0.8},
+                                          {0.45, 0.45, 0.1}, {0.1, 0.45, 0.45}, {0.45, 0.1, 0.45}};
+        parallel_for(m.F.size(), [&](std::size_t t) {
+            const auto& f = m.F[t];
+            const Vec3 &a = m.V[f[0]], &b = m.V[f[1]], &c = m.V[f[2]];
+            const Vec3 n = normalized(cross(b - a, c - a));
+            if (norm(n) == 0) return;  // degenerate: no area, no boundary
+            for (const auto& w : bary) {
+                const Vec3 q = a * w[0] + b * w[1] + c * w[2];
+                if (inside(q + n * eps) != inside(q - n * eps)) {
+                    keep[t] = 1;
+                    return;
+                }
+            }
+        });
+        for (std::size_t t = 0; t < m.F.size(); ++t)
+            if (keep[t]) boundary.F.push_back(m.F[t]);
+        if (boundary.F.empty()) boundary.F = m.F;
+    }
+    const Bvh bvh(m), bvh_b(boundary);
     auto f = [&](const Vec3& p) {
         auto hit = bvh.closest(p);
         const double d = hit ? std::sqrt(hit->dist2) : double(kBand + 1) * h;
         return inside(p) ? -d : d;
     };
     const BrickFiller filler = [&](const IVec3& b, double hh, double* vals) {
+        // signs on the brick plus a one-voxel halo (10^3), so that sign changes
+        // across brick faces are seen from both sides
+        constexpr int kH = kBrick + 2, kHV = kH * kH * kH;
+        auto hid = [](int x, int y, int z) { return ((z + 1) * kH + (y + 1)) * kH + (x + 1); };  // x, y, z in -1..8
         const double dmax = double(kBand + 1) * hh;
-        double d[kBrickVoxels];
-        signed char sg[kBrickVoxels] = {};
+        // strictly more than one voxel (rounding of d must not let a sign through
+        // a voxel that lies on the surface)
+        const double reach = hh * (1 + 1e-6);
+        double d[kHV];                 // distance to all triangles (sign propagation)
+        signed char sg[kHV] = {};
         auto pos = [&](int x, int y, int z) {
             return Vec3{double(b.x * kBrick + x) * hh, double(b.y * kBrick + y) * hh, double(b.z * kBrick + z) * hh};
         };
+        for (int z = -1; z <= kBrick; ++z)
+            for (int y = -1; y <= kBrick; ++y)
+                for (int x = -1; x <= kBrick; ++x) {
+                    auto hit = bvh.closest(pos(x, y, z), dmax);
+                    d[hid(x, y, z)] = hit ? std::sqrt(hit->dist2) : dmax;
+                }
+        int queue[kHV];
+        for (int z0 = -1; z0 <= kBrick; ++z0)
+            for (int y0 = -1; y0 <= kBrick; ++y0)
+                for (int x0 = -1; x0 <= kBrick; ++x0) {
+                    const int s0 = hid(x0, y0, z0);
+                    if (sg[s0]) continue;
+                    sg[s0] = inside_at(pos(x0, y0, z0), d[s0]) ? -1 : 1;
+                    int qh = 0, qt = 0;
+                    queue[qt++] = s0;
+                    while (qh < qt) {
+                        const int i = queue[qh++];
+                        const int x = i % kH - 1, y = (i / kH) % kH - 1, z = i / (kH * kH) - 1;
+                        const int nb[6][3] = {{x - 1, y, z}, {x + 1, y, z}, {x, y - 1, z}, {x, y + 1, z}, {x, y, z - 1}, {x, y, z + 1}};
+                        for (const auto& c : nb) {
+                            if (c[0] < -1 || c[1] < -1 || c[2] < -1 || c[0] > kBrick || c[1] > kBrick || c[2] > kBrick) continue;
+                            const int j = hid(c[0], c[1], c[2]);
+                            if (sg[j] || !(d[i] > reach || d[j] > reach)) continue;
+                            sg[j] = sg[i];
+                            queue[qt++] = j;
+                        }
+                    }
+                }
         for (int z = 0; z < kBrick; ++z)
             for (int y = 0; y < kBrick; ++y)
                 for (int x = 0; x < kBrick; ++x) {
-                    auto hit = bvh.closest(pos(x, y, z), dmax);
-                    d[Brick::index(x, y, z)] = hit ? std::sqrt(hit->dist2) : dmax;
+                    const int i = hid(x, y, z);
+                    auto hb = bvh_b.closest(pos(x, y, z), dmax);
+                    double di = hb ? std::sqrt(hb->dist2) : dmax;
+                    // the boundary lies between a voxel and a face neighbour of the
+                    // other sign: its distance is at most h (also where a boundary
+                    // piece was missed by the triangle classification)
+                    const int nb[6][3] = {{x - 1, y, z}, {x + 1, y, z}, {x, y - 1, z}, {x, y + 1, z}, {x, y, z - 1}, {x, y, z + 1}};
+                    for (const auto& c : nb)
+                        if (sg[hid(c[0], c[1], c[2])] != sg[i]) di = std::min(di, hh);
+                    // a voxel exactly on a sheet keeps its sign (no zero nudge outwards)
+                    di = std::max(di, double(kZeroNudge) * hh);
+                    vals[Brick::index(x, y, z)] = sg[i] < 0 ? -di : di;
                 }
-        int queue[kBrickVoxels];
-        for (int s0 = 0; s0 < kBrickVoxels; ++s0) {
-            if (sg[s0]) continue;
-            const int x0 = s0 % kBrick, y0 = (s0 / kBrick) % kBrick, z0 = s0 / (kBrick * kBrick);
-            sg[s0] = inside(pos(x0, y0, z0)) ? -1 : 1;
-            int qh = 0, qt = 0;
-            queue[qt++] = s0;
-            while (qh < qt) {
-                const int i = queue[qh++];
-                const int x = i % kBrick, y = (i / kBrick) % kBrick, z = i / (kBrick * kBrick);
-                const int nb[6][3] = {{x - 1, y, z}, {x + 1, y, z}, {x, y - 1, z}, {x, y + 1, z}, {x, y, z - 1}, {x, y, z + 1}};
-                for (const auto& c : nb) {
-                    if (c[0] < 0 || c[1] < 0 || c[2] < 0 || c[0] >= kBrick || c[1] >= kBrick || c[2] >= kBrick) continue;
-                    const int j = Brick::index(c[0], c[1], c[2]);
-                    if (sg[j] || !(d[i] > hh || d[j] > hh)) continue;
-                    sg[j] = sg[i];
-                    queue[qt++] = j;
-                }
-            }
-        }
-        for (int i = 0; i < kBrickVoxels; ++i) {
-            // a voxel exactly on an interior sheet keeps its sign (no zero nudge outwards)
-            const double di = std::max(d[i], double(kZeroNudge) * hh);
-            vals[i] = sg[i] < 0 ? -di : di;
-        }
     };
-    return build(f, m.bounds(), h, 0.0, &filler);
+    Grid g = build(f, m.bounds(), h, 0.0, &filler);
+    clean_for_print(g);  // folds of posed skins enclose pockets with w = 0, sign noise, pinches
+    return g;
 }
 
 // ------------------------------------------------------------------ grid booleans

@@ -23,6 +23,7 @@ from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 
 __all__ = [
     "figure", "mini_base", "pose", "on_base", "unique_name",
+    "import_model", "model_file", "model_info", "weapon", "attach", "equip", "merge", "WEAPONS",
     "tube", "prism", "pyramid", "capsule", "rounded_box", "wedge", "ellipsoid", "star",
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
@@ -65,7 +66,10 @@ _PARAM_DIMS = {
                        "l_hip_fwd", "l_hip_side", "l_knee", "r_hip_fwd", "r_hip_side", "r_knee",
                        "tail_curl", "wing_spread", "horn_curl")}),
     "transform": {"tx": LENGTH, "ty": LENGTH, "tz": LENGTH, "rx": ANGLE, "ry": ANGLE, "rz": ANGLE},
+    "weapon": {"length": LENGTH, "width": LENGTH, "thickness": LENGTH, "grip_d": LENGTH, "voxel": LENGTH},
+    "attach": {"pitch": ANGLE, "yaw": ANGLE, "roll": ANGLE, "slide": LENGTH},
 }
+_PARAM_DIMS["model"] = {"height": LENGTH, **{k: v for k, v in _PARAM_DIMS["figure"].items() if v == ANGLE}}
 
 
 def _param(name: str, value, dim) -> tuple:
@@ -341,12 +345,115 @@ def pose(obj, preset: str = "stand") -> Obj:
         raise ValueError(f"pose(): preset must be one of {', '.join(_POSES)}")
     name = _name(obj)
     node = _a.get(name)
-    if node.kind != "Figure":
-        raise ValueError(f"pose(): '{name}' is not a figure (pose before making it sculptable)")
+    if node.kind not in ("Figure", "Model"):
+        raise ValueError(f"pose(): '{name}' is not a figure or an imported model (pose before making it sculptable or merging)")
     angles = {k: 0.0 for k in _PARAM_DIMS["figure"] if _PARAM_DIMS["figure"][k] == ANGLE}
     angles.update({k: float(v) for k, v in _POSES[preset].items()})
     edit(name, **{k: v * deg for k, v in angles.items()})
     return Obj(name)
+
+
+# --------------------------------------------------------------------------- M4: imported minis
+
+def model_file(path: str, sha256: str = "", height=32 * mm, **pose) -> Solid:
+    """An imported mini (GLB / glTF / OBJ / STL) as a posable solid. The file
+    hash is checked when given (saved documents and the journal pass it)."""
+    p = _os.path.abspath(_os.fspath(path))
+    kw = {"height": height}
+    kw.update(pose)
+    node, _sha = _a.load_model(p, sha256, _params("model", kw))
+    return Solid(node)
+
+
+def import_model(path: str, height=32 * mm, name: str = None, **pose) -> Obj:
+    """Imports a mini from Tripo, Meshy, Blender, ... (.glb, .gltf, .obj, .stl),
+    scaled so that it is `height` tall, standing on z = 0 and facing -Y.
+    A rigged GLB (skin) is posed with its own bones; other files get an
+    automatic humanoid rig (best for T- or A-pose models). Pose angles as for
+    figure(), e.g. r_shoulder_fwd=60*deg; presets via pose(obj, "attack")."""
+    s = model_file(path, height=height, **pose)
+    base = _os.path.splitext(_os.path.basename(_os.fspath(path)))[0]
+    base = "".join(c if c.isalnum() or c in "_-" else "_" for c in base) or "Model"
+    if not base[0].isalpha():
+        base = "M_" + base
+    return show(s, name=name or (_a.unique_name(base) if _exists(base) else base))
+
+
+def _exists(name: str) -> bool:
+    return any(n == name for n, _ in _a.objects())
+
+
+def model_info(obj) -> dict:
+    """File, format, triangle count and rig (joint names; 'file' or 'automatic')."""
+    return _a.get(_name(obj)).model_info()
+
+
+WEAPONS = ("longsword", "zweihander", "buster", "dagger", "axe", "spear")
+
+
+def weapon(type: str = "longsword", length=None, width=None, thickness=None, grip_d=None, voxel=None,
+           scale_to=32 * mm) -> Solid:
+    """A weapon as clay, grip centre at the origin, blade towards +Z, edges
+    towards +-X: longsword, zweihander, buster (huge fantasy greatsword),
+    dagger, axe, spear. Unset sizes take the defaults for a figure of height
+    `scale_to` (32 mm heroic scale)."""
+    if type not in WEAPONS:
+        raise ValueError(f"weapon(): type must be one of {', '.join(WEAPONS)}")
+    d = _a.weapon_defaults(type, float(_param("scale_to", scale_to, LENGTH)[0]))
+    kw = {"length": length if length is not None else d["length"] * mm,
+          "width": width if width is not None else d["width"] * mm,
+          "thickness": thickness if thickness is not None else d["thickness"] * mm,
+          "grip_d": grip_d if grip_d is not None else d["grip_d"] * mm,
+          "voxel": voxel}
+    return Solid(_a.make_feature("weapon", [], _params("weapon", kw), {"type": type}))
+
+
+def attach(item, model, hand: str = "r", pitch=None, yaw=None, roll=None, slide=None) -> Solid:
+    """Places `item` (grip at its origin, pointing +Z) in the hand of a posed
+    imported model; it follows every later pose change. hand 'r' or 'l';
+    pitch tilts the blade up (+) / down (-) from pointing forwards, yaw swings
+    it sideways, roll turns it about its own axis, slide moves the hand along
+    the grip."""
+    if hand not in ("r", "l"):
+        raise ValueError("attach(): hand must be 'r' or 'l'")
+    tgt = ref(model) if isinstance(model, (str, Obj)) else model
+    kw = _params("attach", {"pitch": pitch, "yaw": yaw, "roll": roll, "slide": slide})
+    return Solid(_a.make_feature("attach", [_node(item), _node(tgt)], kw, {"hand": hand}))
+
+
+def equip(model, item="longsword", hand: str = "r", name: str = None, **hold) -> Obj:
+    """Gives an imported model a weapon (a type name from WEAPONS, or any
+    solid/object with its grip at the origin) in hand 'r' or 'l', as a new
+    object linked to the model's pose. hold: pitch, yaw, roll, slide."""
+    mname = _name(model)
+    node = _a.get(mname)
+    if node.kind != "Model":
+        raise ValueError(f"equip(): '{mname}' is not an imported model (import_model)")
+    if isinstance(item, str):
+        if item not in WEAPONS:
+            raise ValueError(f"equip(): item must be one of {', '.join(WEAPONS)} or a solid")
+        h = node.params()["height"][0]
+        label = item.capitalize()
+        item = weapon(item, scale_to=h * mm)
+    else:
+        label = "Item"
+    return show(attach(item, mname, hand, **hold), name=name or _a.unique_name(label))
+
+
+def merge(*objs, name: str = None) -> Obj:
+    """Merges several objects (a mini, its weapons, a base, other imported
+    parts) into one closed, printable clay object. The parts stay linked:
+    re-posing the model or editing a weapon updates the merge. The parts are
+    hidden, not deleted."""
+    if len(objs) < 2:
+        raise ValueError("merge(): give at least two objects")
+    names = [_name(o) for o in objs]
+    s = ref(names[0])
+    for n in names[1:]:
+        s = s | ref(n)
+    out = show(s, name=name or _a.unique_name("Mini"))
+    hide(*names)
+    return out
 
 
 def unique_name(prefix: str) -> str:
