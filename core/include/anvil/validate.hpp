@@ -61,6 +61,12 @@ struct ValidationOptions {
     double abs_tol_mm = 0.0;
 };
 
+/// Unfolds local self-intersections (contoured clay): vertices of
+/// intersecting triangles move to the mean of their 1-ring (umbrella
+/// operator), re-checked up to `rounds` times. Returns true if none remain.
+/// Topology is unchanged; displacements stay within the local cell scale.
+bool relax_folds(Mesh& m, double abs_tol_mm, int rounds = 4);
+
 /// Intersection tolerance for float32 positions: tol::kExportSliverUlps ulps
 /// of the largest coordinate magnitude.
 double float_tolerance(const Mesh& m);

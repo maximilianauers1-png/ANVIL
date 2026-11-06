@@ -176,7 +176,11 @@ void SceneBuilder::loop() {
                         so.part_chunks.push_back(ch->chunk);
                         auto sc = snap_cache_.find(key);
                         if (sc == snap_cache_.end() || sc->second->name != o->name)
-                            snap_cache_[key] = make_snap_object(o->name, std::shared_ptr<const Mesh>(ch, &ch->mesh), {});
+                        {
+                            auto so2 = make_snap_object(o->name, std::shared_ptr<const Mesh>(ch, &ch->mesh), {});
+                            so2->centroid = {NAN, NAN, NAN};  // open chunk: no volume centroid
+                            snap_cache_[key] = so2;
+                        }
                         so.part_snaps.push_back(snap_cache_[key]);
                     }
                     so.bounds = sh->mesh->bounds();

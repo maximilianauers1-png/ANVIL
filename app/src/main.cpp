@@ -5,6 +5,7 @@
 //   anvil --bench N --bench-out report.json [--bench-scene scene.stl]
 //                                 orbit benchmark (G1), then quit
 //   anvil --selftest OUTDIR       drive the real UI through the M1 acceptance (E2E)
+//   anvil --render SCRIPT.py OUT.png [--view iso|front|...]  run a script, frame it, save a picture
 //   anvil --measure-startup F     write the cold-start time (ms) to F and quit (gate G3)
 #include <QDateTime>
 #include <QDir>
@@ -136,6 +137,10 @@ int main(int argc, char** argv) {
     const int bench_frames = arg("--bench").toInt();
     const QString bench_out = arg("--bench-out"), bench_scene = arg("--bench-scene"), selftest_dir = arg("--selftest");
     const QString startup_out = arg("--measure-startup");  // write cold-start ms to this file, then quit
+    const QString render_script = arg("--render");
+    const QString render_out = args.indexOf("--render") >= 0 && args.indexOf("--render") + 2 < args.size()
+                                   ? args[args.indexOf("--render") + 2] : QString();
+    const QString render_view = arg("--view").isEmpty() ? QString("iso") : arg("--view");
 
     // Vulkan is required (ADR 0002); fail with a clear message instead of a black window.
     {
@@ -256,6 +261,33 @@ int main(int argc, char** argv) {
             }
         });
         poll->start(200);
+    }
+
+    if (!render_script.isEmpty() && !render_out.isEmpty()) {
+        // documentation pictures: run the script as one command, wait for the
+        // evaluated scene, frame it, grab the window
+        QFile f(render_script);
+        if (!f.open(QIODevice::ReadOnly)) return fatal(2, "cannot read " + render_script);
+        ctrl->execute(QString::fromUtf8(f.readAll()), "render");
+        auto* poll = new QTimer(&app);
+        auto* stage = new int(0);
+        anvil::AppController* c = ctrl.get();
+        QObject::connect(poll, &QTimer::timeout, &app, [=, &app] {
+            viewport->window()->update();
+            if (c->busy() || c->sceneTriangles() == 0 || viewport->triangles() < c->sceneTriangles()) return;
+            if (*stage == 0) {
+                c->setSelection({});
+                viewport->view(render_view);
+                viewport->frameAll();
+                *stage = 1;
+                return;
+            }
+            if (++*stage < 8) return;  // let the camera animation settle
+            window->grabWindow().save(render_out);
+            poll->stop();
+            app.quit();
+        });
+        poll->start(250);
     }
 
     std::unique_ptr<anvil::SelfTest> selftest;

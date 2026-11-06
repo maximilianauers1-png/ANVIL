@@ -188,7 +188,8 @@ NodeKind feature_kind(const std::string& k) {
         {"extrude", NodeKind::Extrude}, {"revolve", NodeKind::Revolve}, {"fillet", NodeKind::Fillet},
         {"chamfer", NodeKind::EdgeChamfer}, {"shell", NodeKind::Shell}, {"linear_pattern", NodeKind::LinearPattern},
         {"circular_pattern", NodeKind::CircularPattern}, {"loft", NodeKind::Loft}, {"sweep", NodeKind::Sweep},
-        {"step", NodeKind::StepImport}, {"solidify", NodeKind::Solidify}, {"deform", NodeKind::Deform}};
+        {"step", NodeKind::StepImport}, {"solidify", NodeKind::Solidify}, {"deform", NodeKind::Deform},
+        {"figure", NodeKind::Figure}, {"mini_base", NodeKind::MiniBase}};
     auto it = m.find(k);
     if (it == m.end()) throw std::invalid_argument("unknown feature '" + k + "'");
     return it->second;
@@ -301,6 +302,7 @@ PYBIND11_EMBEDDED_MODULE(_anvil, m) {
         return NodeHandle{make_sculpt(src.node, voxel, std::move(out))};
     });
     m.attr("DEFAULT_VOXEL_MM") = tol::kDefaultVoxelMm;
+    m.def("voxel_step", &sdf::voxel_step);
     m.attr("MIN_VOXEL_MM") = tol::kMinVoxelMm;
     m.def("export_step", [](const NodeHandle& n, const std::string& path) {
         if (S().replaying()) return;

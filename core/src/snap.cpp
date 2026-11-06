@@ -157,7 +157,8 @@ SnapResult SnapEngine::update(const SnapScene& scene, const SnapQuery& q) {
         if (o->name == q.ignore_object) continue;
         for (const auto& c : o->analytic.centers) cands.push_back({SnapType::Center, c, "Center"});
         for (const auto& c : o->analytic.circles) cands.push_back({SnapType::Center, c.center, "Center"});
-        cands.push_back({SnapType::Centroid, o->centroid, "Centroid (" + o->name + ")"});
+        if (std::isfinite(o->centroid.x) && std::isfinite(o->centroid.y) && std::isfinite(o->centroid.z))
+            cands.push_back({SnapType::Centroid, o->centroid, "Centroid (" + o->name + ")"});
         // tangent points of circles seen from the base point
         if (q.base) {
             for (const auto& c : o->analytic.circles) {

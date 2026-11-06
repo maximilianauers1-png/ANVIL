@@ -11,9 +11,11 @@
 #include <nlohmann/json.hpp>
 #include <clipper2/clipper.h>
 
+#include "anvil/figure.hpp"
 #include "anvil/sketch.hpp"
 #include "anvil/stl.hpp"
 #include "anvil/tolerance.hpp"
+#include "anvil/validate.hpp"
 
 namespace anvil {
 
@@ -49,6 +51,8 @@ const char* node_kind_name(NodeKind k) {
         case NodeKind::Wedge: return "Wedge";
         case NodeKind::Ellipsoid: return "Ellipsoid";
         case NodeKind::Star: return "Star";
+        case NodeKind::Figure: return "Figure";
+        case NodeKind::MiniBase: return "MiniBase";
     }
     return "?";
 }
@@ -139,8 +143,23 @@ const std::vector<ParamSpec>& param_specs(NodeKind k) {
         {"d", kLength, 30, true, false, "outer diameter (tips)"},
         {"d_in", kLength, 14, true, false, "inner diameter (notches)"},
         {"h", kLength, 4, true, false, "height"}};
+    static const std::vector<ParamSpec> fig = [] {
+        std::vector<ParamSpec> v{
+            {"height", kLength, 32, true, false, "height to the top of the head (32 mm = 1:56)"},
+            {"build", kNone, 0.5, false, true, "0 slender .. 1 heavy"},
+            {"heroic", kNone, 0.5, false, true, "0 realistic .. 1 heroic (bigger head, hands, feet)"},
+            {"voxel", kLength, 0, false, true, "clay voxel size (0 = automatic: height/600, at least 0.05 mm)"}};
+        for (const auto& n : figure::pose_names()) v.push_back({n.c_str(), kAngle, 0, false, false, "pose angle"});
+        return v;
+    }();
+    static const std::vector<ParamSpec> mbase{
+        {"d", kLength, 25, true, false, "diameter (25 / 32 / 40 mm standard)"},
+        {"h", kLength, 3.5, true, false, "height (top at z = 0)"},
+        {"seed", kNone, 1, false, true, "pattern variant"}};
     static const std::vector<ParamSpec> none;
     switch (k) {
+        case NodeKind::Figure: return fig;
+        case NodeKind::MiniBase: return mbase;
         case NodeKind::Tube: return tube;
         case NodeKind::Prism: return prism;
         case NodeKind::Pyramid: return pyramid;
@@ -212,8 +231,10 @@ bool is_brep_kind(NodeKind k) {
 
 const std::vector<std::string>& attr_names(NodeKind k) {
     static const std::vector<std::string> edges{"edges"}, faces{"faces"}, step{"path", "sha256"}, ref{"name"},
-        solid{"ends", "join"}, none;
+        solid{"ends", "join"}, fig{"preset"}, mbase{"texture"}, none;
     switch (k) {
+        case NodeKind::MiniBase: return mbase;
+        case NodeKind::Figure: return fig;
         case NodeKind::Solidify: return solid;
         case NodeKind::Fillet: case NodeKind::EdgeChamfer: return edges;
         case NodeKind::Shell: return faces;
@@ -290,7 +311,9 @@ NodePtr make_feature(NodeKind k, std::vector<NodePtr> inputs, std::map<std::stri
     for (const auto& [name, v] : attrs)
         if (std::find(attr_names(k).begin(), attr_names(k).end(), name) == attr_names(k).end())
             throw GeometryError(std::string(node_kind_name(k)) + " has no attribute '" + name + "'");
-    std::size_t need_min = k == NodeKind::Loft || k == NodeKind::Sweep ? 2 : (k == NodeKind::StepImport || k == NodeKind::Ref) ? 0 : 1;
+    std::size_t need_min = k == NodeKind::Loft || k == NodeKind::Sweep ? 2
+                           : (k == NodeKind::StepImport || k == NodeKind::Ref || k == NodeKind::Figure ||
+                              k == NodeKind::MiniBase) ? 0 : 1;
     std::size_t need_max = k == NodeKind::Loft ? 64 : need_min;
     if (inputs.size() < need_min || inputs.size() > need_max)
         throw GeometryError(std::string(node_kind_name(k)) + " needs " + std::to_string(need_min) +
@@ -511,7 +534,7 @@ std::string to_python(const NodePtr& n) {
                 {NodeKind::EdgeChamfer, "chamfer_edges"}, {NodeKind::Shell, "shell"},
                 {NodeKind::LinearPattern, "pattern_linear"}, {NodeKind::CircularPattern, "pattern_circular"},
                 {NodeKind::Loft, "loft"}, {NodeKind::Sweep, "sweep"}, {NodeKind::Solidify, "solidify"},
-                {NodeKind::Deform, "deform"}};
+                {NodeKind::Deform, "deform"}, {NodeKind::Figure, "figure"}, {NodeKind::MiniBase, "mini_base"}};
             o << fn.at(n->kind) << "(";
             bool first = true;
             for (const auto& in : n->inputs) o << (first ? "" : ", ") << to_python(in), first = false;
@@ -659,7 +682,8 @@ struct Evaluator {
     // Mesh-only features (Solidify, Deform, imported meshes) have no exact form.
     bool has_mesh_only(const NodePtr& n) {
         if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::ImportedMesh ||
-            n->kind == NodeKind::Sculpt || is_mesh_primitive(n->kind))
+            n->kind == NodeKind::Sculpt || n->kind == NodeKind::Figure || n->kind == NodeKind::MiniBase ||
+            is_mesh_primitive(n->kind))
             return true;
         if (n->kind == NodeKind::Ref) {
             RefGuard g(ref_depth);
@@ -761,6 +785,15 @@ struct Evaluator {
         return sh;
     }
 
+    static std::shared_ptr<const Shape> shape_from_grid(std::shared_ptr<const sdf::Grid> g) {
+        auto sh = std::make_shared<Shape>();
+        sh->grid = std::move(g);
+        sh->chunks = sdf::chunk_meshes(*sh->grid);
+        sh->mesh = std::make_shared<const Mesh>(sdf::weld(sh->chunks));
+        if (sh->mesh->F.empty()) sh->error = "nothing left (empty clay)";
+        return sh;
+    }
+
     // Sculpt shapes carry no Manifold (building one per stroke would cost more
     // than the stroke); booleans and deform build it here, on demand.
     std::shared_ptr<const Shape> solid_shape(std::shared_ptr<const Shape> s) {
@@ -857,6 +890,17 @@ struct Evaluator {
                 return from_manifold(Manifold::Revolve({c}, circle_segments(R + r, set.chord_mm / 2)));
             }
             case NodeKind::Boolean: {
+                {
+                    // two clay objects: boolean in SDF space (robust for touching/coplanar
+                    // contact, and the result stays sculptable)
+                    auto ga = eval(n->inputs[0]), gb = eval(n->inputs[1]);
+                    if (ga->grid && gb->grid) {
+                        const sdf::GridOp op = n->op == BoolOp::Union        ? sdf::GridOp::Union
+                                               : n->op == BoolOp::Difference ? sdf::GridOp::Difference
+                                                                             : sdf::GridOp::Intersection;
+                        return shape_from_grid(std::make_shared<const sdf::Grid>(sdf::combine(*ga->grid, *gb->grid, op)));
+                    }
+                }
                 auto a = solid_shape(eval(n->inputs[0])), b = solid_shape(eval(n->inputs[1]));
                 for (auto* s : {&a, &b})
                     if (!(*s)->solid) throw GeometryError("boolean operand is not a closed manifold: " + (*s)->error);
@@ -952,6 +996,46 @@ struct Evaluator {
                 return from_manifold(m.Transform(T));
             }
             case NodeKind::Sculpt: return compute_sculpt(n);
+            case NodeKind::MiniBase: {
+                figure::Base b;
+                auto it = n->attrs.find("texture");
+                b.texture = it == n->attrs.end() ? "flagstone" : it->second;
+                if (b.texture != "flagstone" && b.texture != "rubble" && b.texture != "plain")
+                    throw GeometryError("mini_base: texture must be 'flagstone', 'rubble' or 'plain'");
+                b.d = get(n, "d"), b.h = get(n, "h");
+                b.seed = unsigned(std::max(0.0, get(n, "seed")));
+                if (b.h > b.d / 2) throw GeometryError("mini_base: h must be at most d/2");
+                const double h = sdf::voxel_step(std::max(tol::kDefaultVoxelMm, b.d / 600));
+                b.min_feature = 1.2 * h;
+                auto g = std::make_shared<const sdf::Grid>(sdf::from_function(
+                    [&](const Vec3& p) { return b.sdf(p); }, b.bounds(), h, 0.1 * b.h));
+                auto sh = std::make_shared<Shape>();
+                sh->grid = g;
+                sh->chunks = sdf::chunk_meshes(*g);
+                sh->mesh = std::make_shared<const Mesh>(sdf::weld(sh->chunks));
+                return sh;
+            }
+            case NodeKind::Figure: {
+                figure::Params fp;
+                auto it = n->attrs.find("preset");
+                fp.preset = it == n->attrs.end() ? "human" : it->second;
+                if (fp.preset != "human" && fp.preset != "demon")
+                    throw GeometryError("Figure: preset must be 'human' or 'demon', got '" + fp.preset + "'");
+                fp.height = get(n, "height"), fp.build = get(n, "build"), fp.heroic = get(n, "heroic");
+                for (const auto& pn : figure::pose_names()) fp.pose[pn] = get(n, pn.c_str());
+                double h = get(n, "voxel");
+                if (h <= 0) h = sdf::voxel_step(std::max(tol::kDefaultVoxelMm, fp.height / 600));
+                if (h < tol::kMinVoxelMm) throw GeometryError("Figure: voxel must be >= " + repr_double(tol::kMinVoxelMm) + " mm");
+                fp.min_feature = 1.2 * h;  // thinner parts would vanish or make the surface non-manifold
+                const figure::Body body = figure::make_body(fp);
+                auto g = std::make_shared<const sdf::Grid>(sdf::from_function(
+                    [&](const Vec3& p) { return body.sdf(p); }, body.bounds, h, body.blend / 4));
+                auto sh = std::make_shared<Shape>();
+                sh->grid = g;
+                sh->chunks = sdf::chunk_meshes(*g);
+                sh->mesh = std::make_shared<const Mesh>(sdf::weld(sh->chunks));
+                return sh;
+            }
             case NodeKind::Tube: {
                 const double d = get(n, "d"), di = get(n, "d_in"), h = get(n, "h");
                 if (di >= d) throw GeometryError("Tube: d_in (" + repr_double(di) + " mm) must be smaller than d (" + repr_double(d) + " mm)");
@@ -1106,7 +1190,7 @@ std::string brep_json(const NodePtr& root, const VariableResolver& vars, const E
             throw GeometryError("an imported mesh cannot be combined with B-Rep features (fillet, extrude, ...); "
                                 "mesh-to-solid conversion arrives with the repair tools (M5)");
         if (n->kind == NodeKind::Solidify || n->kind == NodeKind::Deform || n->kind == NodeKind::Sculpt ||
-            is_mesh_primitive(n->kind))
+            n->kind == NodeKind::Figure || n->kind == NodeKind::MiniBase || is_mesh_primitive(n->kind))
             throw GeometryError(std::string(node_kind_name(n->kind)) +
                                 " produces mesh geometry; exact features (fillet, chamfer, shell, extrude, ...) cannot be "
                                 "applied on top of it. Apply the exact features first, then combine with the " +
@@ -1178,7 +1262,14 @@ void seed_sculpt_cache(const NodePtr& n, const VariableResolver& vars, const Eva
     sculpt_grid_cache().put(ev.sculpt_prefix_key(n, n->sculpt->strokes.size()), std::move(grid));
 }
 
-Mesh export_mesh(const Shape& s) { return s.mesh->rounded_to_float(); }
+Mesh export_mesh(const Shape& s) {
+    Mesh m = s.mesh->rounded_to_float();
+    if (s.grid) {  // contoured clay: unfold local folds of the cell vertices (validate reports any rest)
+        relax_folds(m, float_tolerance(m));
+        m = m.rounded_to_float();
+    }
+    return m;
+}
 
 AnalyticFeatures analytic_features(const NodePtr& root, const VariableResolver& vars) {
     AnalyticFeatures out;

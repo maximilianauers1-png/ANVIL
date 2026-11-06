@@ -279,6 +279,48 @@ std::uint32_t find(std::vector<std::uint32_t>& p, std::uint32_t x) {
 
 }  // namespace
 
+bool relax_folds(Mesh& m, double abs_tol, int rounds) {
+    // 1-ring adjacency once (topology does not change)
+    std::vector<std::vector<std::uint32_t>> ring(m.V.size());
+    for (const auto& t : m.F)
+        for (int k = 0; k < 3; ++k) {
+            ring[t[k]].push_back(t[(k + 1) % 3]);
+            ring[t[k]].push_back(t[(k + 2) % 3]);
+        }
+    for (int r = 0; r < rounds; ++r) {
+        ValidationOptions opt;
+        opt.abs_tol_mm = abs_tol;
+        opt.max_issues_per_kind = std::size_t(1) << 20;
+        const ValidationReport rep = validate(m, opt);
+        std::vector<std::uint32_t> verts;
+        for (const auto& is : rep.issues)
+            if (is.kind == IssueKind::SelfIntersection)
+                for (auto t : {is.index, is.index2})
+                    if (t >= 0)
+                        for (int k = 0; k < 3; ++k) verts.push_back(m.F[std::size_t(t)][k]);
+        if (verts.empty()) return true;
+        std::sort(verts.begin(), verts.end());
+        verts.erase(std::unique(verts.begin(), verts.end()), verts.end());
+        // include the 1-ring: folds are relaxed with their neighbourhood
+        std::vector<std::uint32_t> region = verts;
+        for (auto v : verts) region.insert(region.end(), ring[v].begin(), ring[v].end());
+        std::sort(region.begin(), region.end());
+        region.erase(std::unique(region.begin(), region.end()), region.end());
+        for (int it = 0; it < 3; ++it) {
+            std::vector<Vec3> np(region.size());
+            for (std::size_t i = 0; i < region.size(); ++i) {
+                Vec3 s{};
+                for (auto u : ring[region[i]]) s += m.V[u];
+                np[i] = ring[region[i]].empty() ? m.V[region[i]] : s / double(ring[region[i]].size());
+            }
+            for (std::size_t i = 0; i < region.size(); ++i) m.V[region[i]] = np[i];
+        }
+    }
+    ValidationOptions opt;
+    opt.abs_tol_mm = abs_tol;
+    return validate(m, opt).counts[int(IssueKind::SelfIntersection)] == 0;
+}
+
 double float_tolerance(const Mesh& m) {
     double mx = 0;
     for (const auto& p : m.V) mx = std::max({mx, std::abs(p.x), std::abs(p.y), std::abs(p.z)});

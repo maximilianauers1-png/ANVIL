@@ -62,6 +62,14 @@ struct Mesh {
     void append(const Mesh& o);
 };
 
+/// Resolves non-manifold edges and vertices where two surface sheets touch
+/// (e.g. thin features in a contoured SDF): at an edge with 2k faces the faces
+/// are sorted by angle around it and paired so that each pair bounds one
+/// solid wedge (the sector between them lies behind the first face's normal);
+/// vertices are then split per connected face fan. Positions are unchanged;
+/// the sheets only touch afterwards. Returns the number of added vertices.
+std::size_t split_nonmanifold(Mesh& m);
+
 /// Edges where the dihedral angle exceeds `angle_rad` (plus boundary edges),
 /// as vertex index pairs. Used for rendering outlines and snapping.
 /// A negative angle returns every edge once (wireframe).

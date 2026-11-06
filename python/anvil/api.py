@@ -22,6 +22,7 @@ from .sketch import Sketch
 from .units import ANGLE, LENGTH, NONE, Quantity, deg, dim_name, mm
 
 __all__ = [
+    "figure", "mini_base",
     "tube", "prism", "pyramid", "capsule", "rounded_box", "wedge", "ellipsoid", "star",
     "Solid", "Obj", "box", "cube", "cylinder", "cone", "sphere", "torus", "transform",
     "show", "hide", "unhide", "delete", "rename", "get", "objects", "var", "edit", "move",
@@ -56,6 +57,13 @@ _PARAM_DIMS = {
     "wedge": {"x": LENGTH, "y": LENGTH, "z": LENGTH},
     "ellipsoid": {"x": LENGTH, "y": LENGTH, "z": LENGTH},
     "star": {"n": NONE, "d": LENGTH, "d_in": LENGTH, "h": LENGTH},
+    "mini_base": {"d": LENGTH, "h": LENGTH, "seed": NONE},
+    "figure": dict({"height": LENGTH, "build": NONE, "heroic": NONE, "voxel": LENGTH},
+                   **{k: ANGLE for k in (
+                       "spine", "neck", "head_turn", "head_tilt",
+                       "l_shoulder_raise", "l_shoulder_fwd", "l_elbow", "r_shoulder_raise", "r_shoulder_fwd", "r_elbow",
+                       "l_hip_fwd", "l_hip_side", "l_knee", "r_hip_fwd", "r_hip_side", "r_knee",
+                       "tail_curl", "wing_spread", "horn_curl")}),
     "transform": {"tx": LENGTH, "ty": LENGTH, "tz": LENGTH, "rx": ANGLE, "ry": ANGLE, "rz": ANGLE},
 }
 
@@ -284,6 +292,31 @@ def ellipsoid(x=30 * mm, y=20 * mm, z=10 * mm) -> Solid:
 def star(n=5, d=30 * mm, d_in=14 * mm, h=4 * mm) -> Solid:
     """Star prism with n points (first tip on +Y), on z = 0."""
     return Solid(_a.make_primitive("star", _params("star", {"n": n, "d": d, "d_in": d_in, "h": h})))
+
+
+def figure(preset: str = "human", height=32 * mm, build=0.5, heroic=0.5, voxel=None, **pose) -> Solid:
+    """Mini Forge: a figure from an armature as sculptable clay, standing on
+    z = 0 and facing -Y. preset "human" or "demon" (horns, tail, wings,
+    claws, digitigrade legs). height = top of the head (1.80 m -> 32 mm is
+    1:56.25). Pose angles, e.g. l_elbow=60*deg, spine=15*deg:
+    spine, neck, head_turn, head_tilt, {l,r}_shoulder_raise, {l,r}_shoulder_fwd,
+    {l,r}_elbow, {l,r}_hip_fwd, {l,r}_hip_side, {l,r}_knee, tail_curl,
+    wing_spread, horn_curl."""
+    if preset not in ("human", "demon"):
+        raise ValueError("figure(): preset must be 'human' or 'demon'")
+    kw = {"height": height, "build": build, "heroic": heroic, "voxel": voxel}
+    kw.update(pose)
+    return Solid(_a.make_feature("figure", [], _params("figure", kw), {"preset": preset}))
+
+
+def mini_base(d=25 * mm, h=3.5 * mm, texture: str = "flagstone", seed: int = 1) -> Solid:
+    """Round miniature base (standard 25 / 32 / 40 mm) with a 45-degree bevel
+    and a procedural top: 'flagstone', 'rubble' or 'plain'. Top at z = 0, so a
+    figure standing on z = 0 stands on it."""
+    if texture not in ("flagstone", "rubble", "plain"):
+        raise ValueError("mini_base(): texture must be 'flagstone', 'rubble' or 'plain'")
+    kw = _params("mini_base", {"d": d, "h": h, "seed": seed})
+    return Solid(_a.make_feature("mini_base", [], kw, {"texture": texture}))
 
 
 def transform(s, tx=None, ty=None, tz=None, rx=None, ry=None, rz=None) -> Solid:
@@ -658,8 +691,7 @@ def _voxel_for(name: str, voxel) -> float:
     # 0.05 mm, a 100 mm part 0.17 mm (interactive at any size)
     bb = info(name)["bbox"]
     diag = math.dist(bb[0], bb[1])
-    h = max(_a.DEFAULT_VOXEL_MM, diag / 600)
-    return float(f"{h:.2g}")
+    return _a.voxel_step(max(_a.DEFAULT_VOXEL_MM, diag / 600))
 
 
 def _coord_mm(v, what: str) -> float:
@@ -692,6 +724,13 @@ def sculptable(obj, voxel=None) -> Obj:
     name = _name(obj)
     node = _a.get(name)
     if node.kind == "Sculpt":
+        return Obj(name)
+    if voxel is None and node.kind in ("Figure", "MiniBase"):
+        # reuse the grid the figure/base already is (no mesh round trip)
+        p = node.params()
+        v = p.get("voxel", (0.0, ""))[0]
+        hgt = p["height"][0] if "height" in p else p["d"][0]
+        _a.set_root(name, _a.make_sculpt(node, v if v > 0 else _a.voxel_step(max(_a.DEFAULT_VOXEL_MM, hgt / 600)), []))
         return Obj(name)
     _a.set_root(name, _a.make_sculpt(node, _voxel_for(name, voxel), []))
     return Obj(name)

@@ -79,6 +79,7 @@ class Grid {
     std::size_t brick_count() const { return bricks_.size(); }
     std::size_t voxel_count() const { return bricks_.size() * kBrickVoxels; }
     std::size_t interior_count() const { return interior_.size(); }
+    const std::unordered_set<IVec3, IVec3Hash>& interior_bricks() const { return interior_; }
     const std::unordered_map<IVec3, std::shared_ptr<Brick>, IVec3Hash>& bricks() const { return bricks_; }
     Box3 bounds() const;  // of the allocated bricks (mm)
     /// New mesh stamp for a brick after a surface-relevant edit.
@@ -97,7 +98,18 @@ class Grid {
 /// Grid from an exact signed distance function (negative inside). `bounds`
 /// must contain the zero set; bricks farther than the band from the surface
 /// are classified by the sign at their center.
-Grid from_function(const std::function<double(const Vec3&)>& f, const Box3& bounds, double h);
+/// `slack` (mm): how far f may overestimate |distance| (e.g. k/4 for a
+/// polynomial smooth-min inside, M0 plan 3.7); added to the skip margins.
+Grid from_function(const std::function<double(const Vec3&)>& f, const Box3& bounds, double h, double slack = 0.0);
+
+/// Boolean of two grids in SDF space (no coplanar-face problems): union =
+/// min(a, b), difference = max(a, -b), intersection = max(a, b). b is
+/// resampled to a's voxel size if they differ.
+enum class GridOp { Union, Difference, Intersection };
+Grid combine(const Grid& a, const Grid& b, GridOp op);
+/// Standard voxel steps (mm): 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, ... -- objects
+/// of similar size get the same voxel and combine without resampling.
+double voxel_step(double wanted);
 
 /// Grid from a closed, consistently oriented triangle mesh: unsigned distance
 /// by BVH closest-point queries, sign from the angle-weighted pseudonormal of

@@ -16,6 +16,13 @@
 
 namespace anvil::sdf {
 
+namespace {
+// A surface exactly through lattice points (f == 0, e.g. a flat top at z = 0)
+// puts several cell vertices on the same point: zero-area triangles. Zero is
+// stored as +2^-10 h instead (consistent with "0 counts as outside").
+constexpr float kZeroNudge = 1.0f / 1024.0f;
+}  // namespace
+
 // ------------------------------------------------------------------ binary16
 std::uint16_t float_to_half(float f) {
     std::uint32_t x;
@@ -211,16 +218,17 @@ bool fill_brick(const std::function<double(const Vec3&)>& f, const IVec3& b, dou
             for (int x = 0; x < kBrick; ++x) {
                 Vec3 p{double(b.x * kBrick + x) * h, double(b.y * kBrick + y) * h, double(b.z * kBrick + z) * h};
                 float v = float(std::clamp(f(p) / h, double(-kBand), double(kBand)));
+                if (v == 0.0f) v = kZeroNudge;  // see kZeroNudge
                 if (std::abs(v) < kBand) any = true;
                 out.v[Brick::index(x, y, z)] = float_to_half(v);
             }
     return any;
 }
 
-Grid build(const std::function<double(const Vec3&)>& f, const Box3& bounds, double h) {
+Grid build(const std::function<double(const Vec3&)>& f, const Box3& bounds, double h, double slack = 0.0) {
     Grid g(h);
     const double bw = kBrick * h, cw = kChunkBricks * bw;
-    const double margin = (kBand + 1) * h;
+    const double margin = (kBand + 1) * h + slack;
     auto lo = bounds.lo - Vec3{margin, margin, margin}, hi = bounds.hi + Vec3{margin, margin, margin};
     const IVec3 c0{int(std::floor(lo.x / cw)), int(std::floor(lo.y / cw)), int(std::floor(lo.z / cw))};
     const IVec3 c1{int(std::floor(hi.x / cw)), int(std::floor(hi.y / cw)), int(std::floor(hi.z / cw))};
@@ -284,8 +292,8 @@ Grid build(const std::function<double(const Vec3&)>& f, const Box3& bounds, doub
 }
 }  // namespace
 
-Grid from_function(const std::function<double(const Vec3&)>& f, const Box3& bounds, double h) {
-    return build(f, bounds, h);
+Grid from_function(const std::function<double(const Vec3&)>& f, const Box3& bounds, double h, double slack) {
+    return build(f, bounds, h, slack);
 }
 
 Grid from_mesh(const Mesh& m, double h) {
@@ -321,6 +329,68 @@ Grid from_mesh(const Mesh& m, double h) {
         return dot(p - hit->point, n) < 0 ? -d : d;
     };
     return build(sdf, m.bounds(), h);
+}
+
+// ------------------------------------------------------------------ grid booleans
+double voxel_step(double wanted) {
+    static const double steps[] = {0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 5};
+    double best = steps[0];
+    for (double s : steps)
+        if (s <= wanted * 1.0000001) best = s;  // the largest standard step not coarser than wanted
+    return best;
+}
+
+Grid combine(const Grid& a, const Grid& b_in, GridOp op) {
+    const double h = a.h();
+    // resample b onto a's lattice when the voxel sizes differ
+    Grid resampled(h);
+    const Grid* bp = &b_in;
+    if (std::abs(b_in.h() - h) > 1e-12 * h) {
+        resampled = from_function([&](const Vec3& p) { return b_in.sample(p); }, b_in.bounds(), h);
+        bp = &resampled;
+    }
+    const Grid& b = *bp;
+    // every brick where either field is stored or inside; elsewhere both are
+    // +band (outside) and every operation gives +band
+    std::unordered_set<IVec3, IVec3Hash> coords;
+    for (const Grid* g : {&a, &b}) {
+        for (const auto& [c, _] : g->bricks()) coords.insert(c);
+        for (const auto& c : g->interior_bricks()) coords.insert(c);
+    }
+    auto value = [](const Grid& g, const IVec3& c, int idx) {
+        auto it = g.bricks().find(c);
+        if (it == g.bricks().end()) return g.is_interior(c) ? -kBand : kBand;
+        return half_to_float(it->second->v[idx]);
+    };
+    Grid out = a;  // shares a's bricks; written bricks are copied on write
+    std::vector<IVec3> touched;
+    for (const auto& c : coords) {
+        const bool b_here = b.allocated(c) || b.is_interior(c);
+        if (!b_here && op != GridOp::Intersection) continue;  // b outside: union/difference leave a as it is
+        std::array<std::uint16_t, kBrickVoxels> hv;
+        for (int i = 0; i < kBrickVoxels; ++i) {
+            const float va = value(a, c, i), vb = value(b, c, i);
+            // polynomial smooth min/max with k = 2 voxels (values are in units of h):
+            // cracks and slivers thinner than about one voxel (e.g. a sole resting on a
+            // stone top) are filled with a small fillet instead of producing two
+            // surface sheets in one cell
+            constexpr float k = 2.0f;
+            auto smin = [&](float x, float y) {
+                const float hh = std::max(k - std::abs(x - y), 0.0f) / k;
+                return std::min(x, y) - hh * hh * k * 0.25f;
+            };
+            float r = op == GridOp::Union ? smin(va, vb) : op == GridOp::Difference ? -smin(-va, vb) : -smin(-va, -vb);
+            r = std::clamp(r, -kBand, kBand);
+            if (r == 0.0f) r = kZeroNudge;
+            hv[i] = float_to_half(r);
+        }
+        Brick& dst = out.mutable_brick(c);  // leaves the interior set if it was there
+        dst.v = hv;
+        out.touch_mesh(c);
+        touched.push_back(c);
+    }
+    out.compact(touched);  // all -band -> interior again, all +band -> dropped
+    return out;
 }
 
 // ------------------------------------------------------------------ Dual Contouring
@@ -596,7 +666,9 @@ std::vector<IVec3> store_block(Grid& g, const Block& B, const Block& before) {
                     for (int y = 0; y < kBrick; ++y)
                         for (int x = 0; x < kBrick; ++x) {
                             const int X = bx * kBrick + x, Y = by * kBrick + y, Z = bz * kBrick + z;
-                            const std::uint16_t nv = float_to_half(std::clamp(B.at(X, Y, Z), -kBand, kBand));
+                            float nvf = std::clamp(B.at(X, Y, Z), -kBand, kBand);
+                            if (nvf == 0.0f) nvf = kZeroNudge;
+                            const std::uint16_t nv = float_to_half(nvf);
                             hv[Brick::index(x, y, z)] = nv;
                             const float ov = std::clamp(before.at(X, Y, Z), -kBand, kBand);
                             if (nv != float_to_half(ov)) {
@@ -1099,6 +1171,7 @@ Mesh weld(const std::vector<std::shared_ptr<const ChunkMesh>>& parts) {
     for (std::size_t pi = 0; pi < parts.size(); ++pi)
         for (const auto& t : parts[pi]->mesh.F)
             out.F.push_back({remap[base[pi] + t[0]], remap[base[pi] + t[1]], remap[base[pi] + t[2]]});
+    split_nonmanifold(out);  // sheets touching inside one cell (features thinner than ~2h)
     return out;
 }
 
