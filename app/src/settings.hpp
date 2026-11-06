@@ -12,6 +12,7 @@ struct Settings {
     QString display = "shaded";   // or "mesh" (triangle edges overlaid)
     QString unit = "mm";
     QString radial_key = "Space";
+    bool snap = true;                 // snapping in move / draw tools
     double chord_mm = 0.01;           // viewport + export default (tol::kDefaultChordMm)
     int autosave_seconds = 60;
     int undo_limit = 1000;

@@ -71,6 +71,13 @@ struct SnapQuery {
     std::optional<Vec3> base;        // base point of a two-point operation
     bool disabled = false;           // Alt held: raw surface/plane point
     std::string ignore_object;       // e.g. the object being moved
+    std::vector<std::string> ignore_objects;  // more of them (several objects moved together)
+    bool ignores(const std::string& n) const {
+        if (n == ignore_object) return true;
+        for (const auto& o : ignore_objects)
+            if (o == n) return true;
+        return false;
+    }
 };
 
 class SnapEngine {

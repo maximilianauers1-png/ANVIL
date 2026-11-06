@@ -112,6 +112,10 @@ AppController::AppController(SessionOptions opt, std::filesystem::path session_d
                     m["triangles"] = qulonglong(o.triangles);
                     m["volume"] = o.volume;
                     m["manifold"] = o.manifold;
+                    if (!o.bounds.empty()) {  // box centre and bottom (tests, readouts)
+                        const Vec3 c = o.bounds.center();
+                        m["cx"] = c.x, m["cy"] = c.y, m["cz"] = c.z, m["zmin"] = o.bounds.lo.z;
+                    }
                     m["error"] = QString::fromStdString(o.error);
                     if (o.visible) tris += o.triangles;
                     objs << m;
@@ -252,13 +256,15 @@ void AppController::attachViewport(ViewportItem* v) {
         if (objectKind(name) == "Sketch") emit uiToolRequested("sketch_edit");
     });
     connect(v, &ViewportItem::radialSelected, this, &AppController::radialPick);
-    connect(v, &ViewportItem::moveRequested, this, [this](const QString& name, double dx, double dy, double dz) {
+    connect(v, &ViewportItem::moveRequested, this, [this](const QStringList& names, double dx, double dy, double dz) {
         QStringList a;
         if (dx != 0) a << "x=" + reprDouble(dx) + "*mm";
         if (dy != 0) a << "y=" + reprDouble(dy) + "*mm";
         if (dz != 0) a << "z=" + reprDouble(dz) + "*mm";
-        if (a.isEmpty()) return;
-        execute("move(" + pyStr(name) + ", " + a.join(", ") + ")", "ui");
+        if (a.isEmpty() || names.isEmpty()) return;
+        QStringList lines;  // all selected objects: one command, one undo step
+        for (const auto& n : names) lines << "move(" + pyStr(n) + ", " + a.join(", ") + ")";
+        execute(lines.join("\n"), "ui");
     });
     connect(this, &AppController::viewRequested, v, [v](const QString& name, const QVector3D& d) {
         if (name.isEmpty()) v->viewDirection(d.x(), d.y(), d.z());

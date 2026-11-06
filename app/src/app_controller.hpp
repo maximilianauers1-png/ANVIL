@@ -37,6 +37,7 @@ class AppController : public QObject {
     Q_PROPERTY(QString theme READ theme NOTIFY themeChanged)
     Q_PROPERTY(QString mode READ mode WRITE setMode NOTIFY modeChanged)
     Q_PROPERTY(QString display READ display NOTIFY displayChanged)
+    Q_PROPERTY(bool snap READ snap WRITE setSnap NOTIFY snapSettingChanged)
     Q_PROPERTY(QString scenery READ scenery NOTIFY sceneryChanged)
     Q_PROPERTY(QString consoleText READ consoleText NOTIFY consoleChanged)
     Q_PROPERTY(QString lastError READ lastError NOTIFY lastErrorChanged)
@@ -155,6 +156,13 @@ class AppController : public QObject {
     /// "12.5" (display unit) or "3 cm" -> mm; NaN when the text is not a plain length.
     Q_INVOKABLE double parseLength(const QString& text) const;
     Q_INVOKABLE QString objectKind(const QString& name) const;
+    bool snap() const { return settings_.snap; }
+    void setSnap(bool on) {
+        if (on == settings_.snap) return;
+        settings_.snap = on;
+        settings_.save();
+        emit snapSettingChanged();
+    }
     Q_INVOKABLE QString objectAttr(const QString& name, const QString& key) const;
     Q_INVOKABLE QVariantMap sketchInfo(const QString& name) const;  // points/curves/dims in world space + solver state
     Q_INVOKABLE void sketchDrag(const QString& sketch, const QString& point, double x, double y);
@@ -167,6 +175,7 @@ class AppController : public QObject {
     Q_INVOKABLE double sculptVoxel(const QString& name) const;  // part the sketch was drawn on ("" = unknown)
 
   signals:
+    void snapSettingChanged();
     void memoryChanged();
     void documentChanged();
     void selectionChanged();

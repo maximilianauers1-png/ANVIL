@@ -29,6 +29,7 @@ Settings Settings::load() {
     // --- migrations: each step upgrades version N -> N+1 (none needed yet) ---
     if (v > kSettingsFormat) return s;  // written by a newer ANVIL: keep defaults, do not overwrite blindly
     s.theme = o.value("theme").toString(s.theme);
+    s.snap = o.value("snap").toBool(s.snap);
     s.unit = o.value("unit").toString(s.unit);
     s.display = o.value("display").toString(s.display);
     s.scenery = o.value("scenery").toString(s.scenery);
@@ -46,6 +47,7 @@ void Settings::save() const {
     QJsonObject o;
     o["version"] = kSettingsFormat;
     o["theme"] = theme;
+    o["snap"] = snap;
     o["unit"] = unit;
     o["display"] = display;
     o["scenery"] = scenery;

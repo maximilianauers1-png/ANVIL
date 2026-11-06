@@ -32,6 +32,11 @@ class ViewportItem : public QQuickItem {
     Q_PROPERTY(bool meshView MEMBER mesh_view_ NOTIFY styleChanged)
     // sculpting (M3)
     Q_PROPERTY(bool sculptMode READ sculptMode WRITE setSculptMode NOTIFY toolChanged)
+    /// Snapping to points, edges, centres and the grid (off: free, continuous placement).
+    Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
+    /// Offset of the object(s) being moved (live, in mm).
+    Q_PROPERTY(QVector3D moveOffset READ moveOffset NOTIFY moveChanged)
+    Q_PROPERTY(bool moving READ moving NOTIFY moveChanged)
     Q_PROPERTY(QString sculptBrush MEMBER sculpt_brush_ NOTIFY sculptChanged)
     Q_PROPERTY(double sculptRadius MEMBER sculpt_radius_ NOTIFY sculptChanged)
     Q_PROPERTY(double sculptStrength MEMBER sculpt_strength_ NOTIFY sculptChanged)
@@ -215,6 +220,8 @@ class ViewportItem : public QQuickItem {
     Q_INVOKABLE void runBenchmark(int frames, const QString& outPath);
 
   signals:
+    void snapEnabledChanged();
+    void moveChanged();
     void cutChanged();
     /// A finished cut: targets, world path, direction, mode, keep (left/right/inside/outside/above/below/both).
     void cutRequested(const QStringList& targets, const QVariantList& path, const QVector3D& dir, const QString& mode,
@@ -236,7 +243,7 @@ class ViewportItem : public QQuickItem {
     void picked(const QString& name, bool additive);
     void radialSelected(const QVariantList& path, const QString& context, const QVector3D& point);
     /// Two-point move finished: emit the translation (mm).
-    void moveRequested(const QString& name, double dx, double dy, double dz);
+    void moveRequested(const QStringList& names, double dx, double dy, double dz);
     void drawChanged();
     /// Drawing finished: points in sketch-plane coordinates (mm).
     void sketchDrawn(const QString& kind, const QString& plane, double offset, const QVariantList& points, bool closed,
@@ -333,6 +340,30 @@ class ViewportItem : public QQuickItem {
     std::optional<std::array<double, 2>> rayToPlane(QPointF pos) const;
     QPointF sketchToItem(double x, double y) const;
     std::optional<Vec3> base_;
+    bool snap_enabled_ = true;
+    // Moving: in the plane through the grab/base point perpendicular to the
+    // view, so the depth never jumps (whatever lies under the pointer).
+    struct Move {
+        QStringList objs;
+        bool candidate = false;  // pressed on a selected object (select tool)
+        bool dragging = false;
+        Vec3 plane_p, plane_n;   // constraint plane
+        Vec3 offset{};
+    } mv_;
+    std::optional<Vec3> viewPlanePoint(QPointF pos, const Vec3& p, const Vec3& n) const;
+    void updateMoveOffset(QPointF pos);
+    void finishMove();
+  public:
+    bool snapEnabled() const { return snap_enabled_; }
+    void setSnapEnabled(bool on) {
+        if (on == snap_enabled_) return;
+        snap_enabled_ = on;
+        emit snapEnabledChanged();
+        if (!on) { snap_visible_ = false; emit snapChanged(); }
+    }
+    QVector3D moveOffset() const { return QVector3D(float(mv_.offset.x), float(mv_.offset.y), float(mv_.offset.z)); }
+    bool moving() const { return mv_.dragging || (tool_ == "move" && base_.has_value()); }
+  private:
     RadialGesture radial_;
     RadialRingProvider radial_rings_;
     std::function<QString(const QString&)> context_resolver_;

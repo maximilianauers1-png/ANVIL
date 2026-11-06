@@ -11,8 +11,11 @@
 #include "anvil/tolerance.hpp"
 
 #include "viewport_item.hpp"
+#include "view_util.hpp"
 
 namespace anvil {
+
+using namespace view_util;
 
 namespace {
 constexpr double kInferPx = 8.0;     // horizontal/vertical inference radius
@@ -20,40 +23,6 @@ constexpr double kClosePx = 10.0;    // clicking this close to the first point c
 constexpr double kGridSnapPx = 8.0;  // grid snap radius
 constexpr double kLinePickPx = 6.0;  // sketch line picking radius
 
-double nice_step(double raw) {  // 1, 2, 5 x 10^k
-    double p = std::pow(10.0, std::floor(std::log10(raw)));
-    for (double m : {1.0, 2.0, 5.0, 10.0})
-        if (m * p >= raw) return m * p;
-    return 10 * p;
-}
-
-// Removes floating-point noise from picked coordinates: values are rounded to
-// tol::kAbsNumericMm (below every geometric tolerance), and -0 becomes 0, so
-// 3.0000000000000284 is stored as 3 and the generated command reads cleanly.
-// Rounding is done as round(v*N)/N with an exact integer N: the final division
-// of two exactly representable numbers is correctly rounded (IEEE 754), so
-// decimal values come out as their nearest double (multiplying by 1e-9 would not).
-double round_decimal(double v, int decimals) {
-    if (decimals <= 0) {
-        double s = std::pow(10.0, -decimals);
-        return std::round(v / s) * s;
-    }
-    double n = std::pow(10.0, decimals);  // exact for decimals <= 22
-    return std::round(v * n) / n;
-}
-
-double clean(double v) {
-    const int dec = int(std::lround(-std::log10(tol::kAbsNumericMm)));
-    double r = round_decimal(v, dec);
-    return r == 0 ? 0.0 : r;
-}
-
-// Free (unsnapped) points are only known to about one pixel: keep the largest
-// decimal step not coarser than a pixel, 10^floor(log10(wpp)).
-double quantize_px(double v, double wpp) {
-    int dec = -int(std::floor(std::log10(std::max(wpp, tol::kAbsNumericMm))));
-    return round_decimal(v, dec);
-}
 }  // namespace
 
 void ViewportItem::setPlaneFrame(SketchPlane p, double offset) {

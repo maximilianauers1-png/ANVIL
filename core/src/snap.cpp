@@ -111,7 +111,7 @@ SnapResult SnapEngine::update(const SnapScene& scene, const SnapQuery& q) {
     std::optional<RayHit> hit;
     const SnapObject* hit_obj = nullptr;
     for (const auto& o : scene.objects) {
-        if (o->name == q.ignore_object) continue;
+        if (q.ignores(o->name)) continue;
         double tmax = hit ? hit->t : INFINITY;
         if (auto h = o->bvh->raycast(ray.origin, ray.dir, 0.0, tmax)) hit = h, hit_obj = o.get();
     }
@@ -154,7 +154,7 @@ SnapResult SnapEngine::update(const SnapScene& scene, const SnapQuery& q) {
 
     cands.push_back({SnapType::Origin, {0, 0, 0}, "Origin"});
     for (const auto& o : scene.objects) {
-        if (o->name == q.ignore_object) continue;
+        if (q.ignores(o->name)) continue;
         for (const auto& c : o->analytic.centers) cands.push_back({SnapType::Center, c, "Center"});
         for (const auto& c : o->analytic.circles) cands.push_back({SnapType::Center, c.center, "Center"});
         if (std::isfinite(o->centroid.x) && std::isfinite(o->centroid.y) && std::isfinite(o->centroid.z))
@@ -185,7 +185,7 @@ SnapResult SnapEngine::update(const SnapScene& scene, const SnapQuery& q) {
                 double a = k * 0.39269908169872414, ox = std::cos(a) * rr * rmax_px, oy = std::sin(a) * rr * rmax_px;
                 Ray pr = cam.ray(q.mx + ox, q.my + oy);
                 for (const auto& o : scene.objects) {
-                    if (o->name == q.ignore_object) continue;
+                    if (q.ignores(o->name)) continue;
                     if (auto h = o->bvh->raycast(pr.origin, pr.dir)) {
                         if (std::hypot(ox, oy) < best_d) best_d = std::hypot(ox, oy), probe = h;
                     }
@@ -200,7 +200,7 @@ SnapResult SnapEngine::update(const SnapScene& scene, const SnapQuery& q) {
         box.add(probe->point + Vec3{rho, rho, rho});
         std::vector<std::array<Vec3, 2>> near_edges;
         for (const auto& o : scene.objects) {
-            if (o->name == q.ignore_object || !o->bvh->bounds().overlaps(box)) continue;
+            if (q.ignores(o->name) || !o->bvh->bounds().overlaps(box)) continue;
             const std::uint64_t N = o->mesh->V.size();
             std::unordered_set<std::uint64_t> seen;
             o->bvh->query(box, [&](std::uint32_t f) {

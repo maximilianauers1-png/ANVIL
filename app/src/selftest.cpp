@@ -407,6 +407,46 @@ SelfTest::SelfTest(QQuickWindow* w, ViewportItem* v, AppController* c, QString o
     add("screenshot cut result", [this] { screenshot("17_cut_result"); });
     add("perspective again", [this] { app_->requestView("perspective"); }, [this] { return idle() && !view_->ortho(); });
 
+    // 19) Moving: drag a selected box across a taller box that overlaps the path (top view).
+    //     The move stays in the view plane: no jump onto the other box, exact target.
+    add("move: two boxes", [this] {
+        app_->setSelection({});
+        for (const auto& o : app_->objects())
+            if (o.toMap()["visible"].toBool()) app_->toggleVisible(o.toMap()["name"].toString());
+        app_->execute("show(box(x=10*mm, y=10*mm, z=4*mm), name=\"MoveBox\")\n"
+                      "show(box(x=6*mm, y=30*mm, z=12*mm).translate(x=14*mm), name=\"Wall\")", "ui");
+    }, [this] { return idle() && hasObject("MoveBox") && hasObject("Wall"); }, 30000);
+    add("move: ortho top view", [this] { app_->requestView("ortho"); app_->requestView("top"); },
+        [this] { return idle() && view_->ortho() && std::abs(view_->camForward().z() + 1.0f) < 1e-3f; });
+    add("move: frame", [this] { view_->frameAll(); }, [this] { return idle(); });
+    add("move: select the box", [this] { app_->setSelection({"MoveBox"}); }, [this] { return view_->property("snapEnabled").toBool(); });
+    add("move: drag across the wall", [this] {
+        QPointF a = project(0, 0, 4);
+        mouseMove(a);
+        mousePress(a, Qt::LeftButton);
+        for (int i = 1; i <= 20; ++i) mouseMove(project(28.0 * i / 20, 6.0 * i / 20, 4), Qt::LeftButton);  // over the wall
+        mouseRelease(project(28, 6, 4), Qt::LeftButton);
+    }, [this] {
+        auto h = app_->history();
+        return idle() && h.back().toMap()["source"].toString().startsWith("move(\"MoveBox\"") &&
+               std::abs(objectValue("MoveBox", "cx") - 28) < 1e-9 && std::abs(objectValue("MoveBox", "cy") - 6) < 1e-9 &&
+               std::abs(objectValue("MoveBox", "zmin")) < 1e-12;  // no jump in depth
+    }, 30000);
+    add("move: snap off", [this] { clickItem("snapToggle"); }, [this] { return !view_->property("snapEnabled").toBool(); });
+    add("move: free drag back", [this] {
+        QPointF a = project(28, 6, 4);
+        mouseMove(a);
+        mousePress(a, Qt::LeftButton);
+        for (int i = 1; i <= 10; ++i) mouseMove(project(28 - 18.3 * i / 10, 6 - 3.7 * i / 10, 4), Qt::LeftButton);
+        mouseRelease(project(9.7, 2.3, 4), Qt::LeftButton);
+    }, [this] {
+        auto h = app_->history();
+        return idle() && h.back().toMap()["source"].toString().startsWith("move(\"MoveBox\"") &&
+               std::abs(objectValue("MoveBox", "cx") - 9.7) < 0.1 && std::abs(objectValue("MoveBox", "zmin")) < 1e-12;
+    }, 30000);
+    add("move: snap on again", [this] { clickItem("snapToggle"); }, [this] { return view_->property("snapEnabled").toBool(); });
+    add("move: perspective again", [this] { app_->requestView("perspective"); }, [this] { return idle() && !view_->ortho(); });
+
     // 14) Studio scenery: sunset, fjord, night (procedural environment pass)
     for (const char* sc : {"sunset", "fjord", "night"}) {
         const QString name = sc;

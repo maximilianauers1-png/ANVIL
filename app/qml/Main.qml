@@ -55,6 +55,7 @@ ApplicationWindow {
                     scenery: Theme.name === "studio" ? App.scenery : "none"
                     sculptMode: App.mode === "Sculpt"
                     objectColors: Theme.objectColors
+                    snapEnabled: App.snap
 
                     // Radial menu key (default Space): hold, flick, release.
                     Keys.onPressed: (e) => {
@@ -136,6 +137,73 @@ ApplicationWindow {
                     onEditRequested: (name) => sketchEditor.open(name)
                 }
                 RadialMenu { anchors.fill: parent; view: viewport }
+                // snap toggle and live move readout, bottom right
+                Rectangle {
+                    id: snapBox
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: Theme.unit
+                    width: snapRow.implicitWidth + 12
+                    height: snapRow.implicitHeight + 8
+                    radius: Theme.radius
+                    color: Theme.gearDark
+                    border.color: Theme.gearEdge
+                    Row {
+                        id: snapRow
+                        anchors.centerIn: parent
+                        spacing: 8
+                        Text {
+                            visible: viewport.moving
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Δ " + App.formatPoint(viewport.moveOffset)
+                            color: Theme.gearText
+                            font.family: Theme.mono
+                            font.pixelSize: Theme.fontSmall + 1
+                        }
+                        Rectangle {
+                            objectName: "snapToggle"
+                            width: snapLbl.implicitWidth + 34
+                            height: 26
+                            radius: Theme.radius
+                            color: App.snap ? Theme.accent : (snapMa.containsMouse ? Theme.gearFaceHot : Theme.gearFace)
+                            border.color: App.snap ? Theme.accent : Theme.gearEdge
+                            Canvas {  // magnet
+                                anchors.left: parent.left
+                                anchors.leftMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 18; height: 18
+                                property color ink: App.snap ? Theme.accentText : Theme.gearText
+                                onInkChanged: requestPaint()
+                                onPaint: {
+                                    var c = getContext("2d"); c.reset()
+                                    c.strokeStyle = ink; c.lineWidth = 3.2; c.lineCap = "butt"
+                                    c.beginPath(); c.arc(9, 8, 5.5, Math.PI, 0, false)
+                                    c.moveTo(3.5, 8); c.lineTo(3.5, 15); c.moveTo(14.5, 8); c.lineTo(14.5, 15); c.stroke()
+                                    c.fillStyle = ink; c.fillRect(1.9, 13, 3.2, 3); c.fillRect(12.9, 13, 3.2, 3)
+                                }
+                            }
+                            Text {
+                                id: snapLbl
+                                anchors.right: parent.right
+                                anchors.rightMargin: 7
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: App.snap ? "Snap on" : "Snap off"
+                                color: App.snap ? Theme.accentText : Theme.gearText
+                                font.family: Theme.font
+                                font.pixelSize: Theme.fontSmall + 1
+                                font.bold: true
+                            }
+                            MouseArea {
+                                id: snapMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: App.snap = !App.snap
+                                ToolTip.visible: containsMouse
+                                ToolTip.text: "Snapping to points, edges, centres and the grid (hold Alt to bypass once)"
+                            }
+                        }
+                    }
+                }
                 ViewCube {
                     anchors.top: parent.top
                     anchors.right: parent.right

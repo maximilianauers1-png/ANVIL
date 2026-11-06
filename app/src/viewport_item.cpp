@@ -1,4 +1,5 @@
 #include "viewport_item.hpp"
+#include "view_util.hpp"
 #include "sculpt_engine.hpp"
 
 #include <QFile>
@@ -164,7 +165,7 @@ void ViewportItem::sync() {
             QString qn = QString::fromStdString(o.name);
             bool sel = selection_.contains(qn) || (tool_ == "pick" && picked_tools_.contains(qn));
             item.highlight = sel ? 1.f : 0.f;
-            if (sel && tool_ == "move" && base_) item.extra_offset = snap_.point - *base_;
+            if (moving() && mv_.objs.contains(qn)) item.extra_offset = mv_.offset;
             const std::uint64_t oslot = std::hash<std::string>()(o.name) | 1;  // nonzero
             if (o.gpu) {
                 item.slot = oslot;
@@ -324,7 +325,8 @@ QString ViewportItem::snapKind() const {
 
 QString ViewportItem::toolHint() const {
     if (tool_ == "move")
-        return base_ ? "Move: click the destination point (Esc cancels)" : "Move: click the base point (Esc cancels)";
+        return base_ ? "Move: click the destination (moves in the view plane; snap toggle bottom right, Alt: no snapping)  ·  Esc cancels"
+                     : "Move: click the base point  ·  or drag a selected object directly  ·  Esc cancels";
     if (tool_ == "draw") {
         if (!draw_.have_plane) return "Click to start (on a face or the ground)  ·  Alt: no snapping  ·  Esc cancels";
         if (draw_.kind == "rect") return "Click the opposite corner (or type a length)";
@@ -389,15 +391,14 @@ void ViewportItem::updateSnap(QPointF pos) {
     q.cam.height = height() * dpr();
     q.mx = pos.x() * dpr();
     q.my = pos.y() * dpr();
-    q.disabled = QGuiApplication::queryKeyboardModifiers() & Qt::AltModifier;
-    if (tool_ == "move" && base_) {
-        q.base = base_;
-        if (!selection_.isEmpty()) q.ignore_object = selection_.front().toStdString();
+    q.disabled = !snap_enabled_ || (QGuiApplication::queryKeyboardModifiers() & Qt::AltModifier);
+    if (moving()) {
+        q.base = mv_.plane_p;
+        for (const auto& o : mv_.objs) q.ignore_objects.push_back(o.toStdString());
     }
     snap_ = snap_engine_.update(sc, q);
     snap_visible_ = snap_.type != SnapType::None;
     emit snapChanged();
-    if (tool_ == "move" && base_) requestFrame();
 }
 
 // ------------------------------------------------------------------ input
@@ -414,6 +415,17 @@ void ViewportItem::mousePressEvent(QMouseEvent* e) {
         e->accept();
         return;
     }
+    // pressing on a selected object (select tool) may start dragging it
+    mv_.candidate = false;
+    if (e->button() == Qt::LeftButton && tool_ == "select" && !selection_.isEmpty() &&
+        !(e->modifiers() & (Qt::ControlModifier | Qt::ShiftModifier)))
+        if (auto h = rayPick(e->position()); h && selection_.contains(QString::fromStdString(h->first))) {
+            mv_ = Move{};
+            mv_.candidate = true;
+            mv_.objs = selection_;
+            mv_.plane_p = h->second;
+            mv_.plane_n = cam_.forward();
+        }
     if (e->button() == Qt::RightButton) {
         hover_pos_ = e->position();
         updateSnap(hover_pos_);
@@ -439,6 +451,12 @@ void ViewportItem::mouseMoveEvent(QMouseEvent* e) {
         return;
     }
     if (!dragging_ && QLineF(p, press_pos_).length() > kDragThresholdPx) dragging_ = true;
+    if (dragging_ && mv_.candidate) {  // drag the selection in the view plane
+        mv_.dragging = true;
+        updateMoveOffset(p);
+        last_pos_ = p;
+        return;
+    }
     if (dragging_) {
         QPointF delta = p - last_pos_;
         bool pan = drag_button_ == Qt::MiddleButton ||
@@ -470,15 +488,41 @@ void ViewportItem::mouseReleaseEvent(QMouseEvent* e) {
         drag_button_ = Qt::NoButton;
         return;
     }
+    if (mv_.dragging && e->button() == Qt::LeftButton) {
+        updateMoveOffset(e->position());
+        finishMove();
+        dragging_ = false;
+        drag_button_ = Qt::NoButton;
+        return;
+    }
+    mv_.candidate = false;
     if (!dragging_ && e->button() == Qt::LeftButton) {
         updateSnap(e->position());
         if (tool_ == "move") {
             if (!base_) {
-                base_ = snap_.point;
+                // base point: a snapped feature, else the surface under the pointer,
+                // else the centre plane of the selection; the move plane goes through it
+                Vec3 b;
+                if (snap_visible_ && snap_.type != SnapType::Plane) b = snap_.point;
+                else if (auto h = rayPick(e->position())) b = h->second;
+                else {
+                    Box3 bb;
+                    if (scene_)
+                        for (const auto& o : scene_->objects)
+                            if (selection_.contains(QString::fromStdString(o.name))) bb.add(o.bounds);
+                    const Vec3 c = bb.empty() ? Vec3{} : bb.center();
+                    b = viewPlanePoint(e->position(), c, cam_.forward()).value_or(c);
+                }
+                base_ = b;
+                mv_ = Move{};
+                mv_.objs = selection_;
+                mv_.plane_p = b;
+                mv_.plane_n = cam_.forward();
                 emit toolChanged();
-            } else if (!selection_.isEmpty()) {
-                Vec3 delta = snap_.point - *base_;
-                emit moveRequested(selection_.front(), delta.x, delta.y, delta.z);
+                emit moveChanged();
+            } else {
+                updateMoveOffset(e->position());
+                finishMove();
                 cancelTool();
             }
         } else if (tool_ == "draw") {
@@ -537,6 +581,7 @@ void ViewportItem::hoverMoveEvent(QHoverEvent* e) {
         return;
     }
     if (tool_ == "draw") drawMove(hover_pos_);
+    else if (tool_ == "move" && base_) updateMoveOffset(hover_pos_);
     else if (tool_ == "cut") cutMove(hover_pos_, false);
     else if (tool_ == "sculpt") sculptHover(hover_pos_);
     else updateSnap(hover_pos_);
@@ -582,6 +627,64 @@ void ViewportItem::radialCancel() {
     emit radialChanged();
 }
 
+// ------------------------------------------------------------------ moving
+std::optional<Vec3> ViewportItem::viewPlanePoint(QPointF pos, const Vec3& p, const Vec3& n) const {
+    Camera c = cam_;
+    c.width = width() * dpr(), c.height = height() * dpr();
+    const Ray r = c.ray(pos.x() * dpr(), pos.y() * dpr());
+    const Vec3 d = normalized(r.dir);
+    const double den = dot(d, n);
+    if (std::abs(den) < 1e-9) return std::nullopt;
+    return r.origin + d * (dot(p - r.origin, n) / den);
+}
+
+void ViewportItem::updateMoveOffset(QPointF pos) {
+    const Vec3 n = mv_.plane_n;
+    auto hit = viewPlanePoint(pos, mv_.plane_p, n);
+    if (!hit) return;
+    Vec3 off = *hit - mv_.plane_p;
+    const double wpp = cam_.world_per_pixel(cam_.distance) * dpr();
+    const bool snap = snap_enabled_ && !(QGuiApplication::queryKeyboardModifiers() & Qt::AltModifier);
+    bool featured = false;
+    if (snap) {
+        // a point, edge or centre of another object near the pointer, projected
+        // into the move plane (alignment without leaving the plane)
+        updateSnap(pos);
+        if (snap_visible_ && snap_.type != SnapType::Plane && snap_.type != SnapType::Normal && snap_.type != SnapType::None &&
+            !snap_.object.empty()) {
+            const Vec3 t = snap_.point - n * dot(snap_.point - mv_.plane_p, n);
+            off = t - mv_.plane_p;
+            featured = true;
+        }
+    }
+    if (!featured) {
+        // an axis-aligned view moves exactly along two world axes: round those to a
+        // fine, zoom-dependent step (~2 px, 1/2/5 x 10^k) -- smooth and clean numbers;
+        // otherwise (oblique view or snapping off) only the sub-pixel noise is removed
+        const int axis = std::abs(n.x) > 0.9999 ? 0 : std::abs(n.y) > 0.9999 ? 1 : std::abs(n.z) > 0.9999 ? 2 : -1;
+        const double g = view_util::nice_step(2 * wpp);
+        double c[3] = {off.x, off.y, off.z};
+        for (int k = 0; k < 3; ++k) {
+            if (k == axis) c[k] = 0;
+            else if (snap && axis >= 0) c[k] = view_util::clean(std::round(c[k] / g) * g);
+            else c[k] = view_util::quantize_px(c[k], wpp);
+        }
+        off = {c[0], c[1], c[2]};
+    }
+    mv_.offset = off;
+    emit moveChanged();
+    requestFrame();
+}
+
+void ViewportItem::finishMove() {
+    const Vec3 d = mv_.offset;
+    const QStringList objs = mv_.objs;
+    mv_ = Move{};
+    emit moveChanged();
+    requestFrame();
+    if (!objs.isEmpty() && (d.x != 0 || d.y != 0 || d.z != 0)) emit moveRequested(objs, d.x, d.y, d.z);
+}
+
 // ------------------------------------------------------------------ tools / camera
 void ViewportItem::startMoveTool() {
     if (selection_.isEmpty()) return;
@@ -598,6 +701,10 @@ void ViewportItem::cancelTool() {
     }
     tool_ = "select";
     base_.reset();
+    if (mv_.dragging || mv_.candidate || !mv_.objs.isEmpty()) {
+        mv_ = Move{};
+        emit moveChanged();
+    }
     picked_tools_.clear();
     pick_target_.clear();
     if (was_draw) {
